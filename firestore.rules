@@ -1,0 +1,397 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // CORE HELPER FUNCTIONS
+    // =========================================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function userDocExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        userDocExists(request.auth.uid) &&
+        getUserData(request.auth.uid).role == 'admin';
+    }
+
+    function isShopkeeper() {
+      return isAuthenticated() &&
+        userDocExists(request.auth.uid) &&
+        getUserData(request.auth.uid).role == 'shopkeeper';
+    }
+
+    function isShopOwner(shopId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/shops/$(shopId)) &&
+        get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid;
+    }
+
+    function isApprovedShop(shopId) {
+      return exists(/databases/$(database)/documents/shops/$(shopId)) &&
+        get(/databases/$(database)/documents/shops/$(shopId)).data.status == 'approved';
+    }
+
+    // =========================================================================
+    // USERS COLLECTION (/users/{userId})
+    // =========================================================================
+    match /users/{userId} {
+      // 1. Read: Users can read their own profile; Admins can read any profile
+      allow read: if isOwner(userId) || isAdmin();
+
+      // 2. Create: Authenticated users can create their own profile ONLY IF:
+      //    - Document ID matches their auth uid
+      //    - Role is strictly "customer" (prevents role elevation)
+      //    - Status is "active"
+      //    - Initial points and pointsBalance must be 0
+      allow create: if isOwner(userId) &&
+        request.resource.data.role == 'customer' &&
+        (!('status' in request.resource.data) || request.resource.data.status == 'active') &&
+        (!('points' in request.resource.data) || request.resource.data.points == 0) &&
+        (!('pointsBalance' in request.resource.data) || request.resource.data.pointsBalance == 0) &&
+        (!('pendingPoints' in request.resource.data) || request.resource.data.pendingPoints == 0);
+
+      // 3. Update:
+      //    - Admins can update any profile (assign roles, update balance, suspend)
+      //    - Users can update their own personal info (name, phone, address, avatar)
+      //      BUT cannot change role, status, pointsBalance, pendingPoints, or id/uid
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.role == resource.data.role &&
+        (!('status' in resource.data) || request.resource.data.status == resource.data.status) &&
+        (!('points' in resource.data) || request.resource.data.points == resource.data.points) &&
+        (!('pointsBalance' in resource.data) || request.resource.data.pointsBalance == resource.data.pointsBalance) &&
+        (!('pendingPoints' in resource.data) || request.resource.data.pendingPoints == resource.data.pendingPoints) &&
+        (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
+        (!('id' in resource.data) || request.resource.data.id == resource.data.id) &&
+        (!('referralCode' in resource.data) || request.resource.data.referralCode == resource.data.referralCode) &&
+        (!('referredBy' in resource.data) || request.resource.data.referredBy == resource.data.referredBy)
+      );
+
+      // 4. Delete: Only administrators can delete user accounts
+      allow delete: if isAdmin();
+
+      // User cart subcollection
+      match /cart/{cartItemId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // =========================================================================
+    // SHOPS COLLECTION (/shops/{shopId})
+    // =========================================================================
+    match /shops/{shopId} {
+      // 1. Read:
+      //    - Public can read approved shops
+      //    - Shop owners can read their own shop regardless of status
+      //    - Admins can read all shops
+      allow read: if (resource.data.status == 'approved') ||
+        (isAuthenticated() && resource.data.ownerId == request.auth.uid) ||
+        isAdmin();
+
+      // 2. Create:
+      //    - Admins can create any shop
+      //    - Authenticated users can register a shop, but status MUST be 'pending'
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0
+      );
+
+      // 3. Update:
+      //    - Admins can update any shop (approve, reject, suspend, edit)
+      //    - Shop owners can update their own shop details, but CANNOT modify:
+      //      approval status, ownerId, rating, or reviewCount, and shop must not be suspended
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.ownerId == request.auth.uid &&
+        resource.data.status != 'suspended' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        (!('rating' in resource.data) || request.resource.data.rating == resource.data.rating) &&
+        (!('reviewCount' in resource.data) || request.resource.data.reviewCount == resource.data.reviewCount)
+      );
+
+      // 4. Delete: Only administrators can delete shops
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // PRODUCTS COLLECTION (/products/{productId})
+    // =========================================================================
+    match /products/{productId} {
+      // 1. Read: Products in the marketplace are publicly readable
+      allow read: if true;
+
+      // 2. Create:
+      //    - Admins can create any product
+      //    - Shopkeepers can create products only for their own APPROVED shop
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.shopId is string &&
+        isShopOwner(request.resource.data.shopId) &&
+        isApprovedShop(request.resource.data.shopId) &&
+        request.resource.data.price is number && request.resource.data.price >= 0 &&
+        request.resource.data.stock is number && request.resource.data.stock >= 0
+      );
+
+      // 3. Update:
+      //    - Admins can update any product
+      //    - Shop owner can update their product, but cannot reassign shopId
+      allow update: if isAdmin() || (
+        isShopOwner(resource.data.shopId) &&
+        isApprovedShop(resource.data.shopId) &&
+        request.resource.data.shopId == resource.data.shopId &&
+        (!('rating' in resource.data) || request.resource.data.rating == resource.data.rating) &&
+        (!('reviewCount' in resource.data) || request.resource.data.reviewCount == resource.data.reviewCount)
+      );
+
+      // 4. Delete:
+      //    - Admins or the owner of the shop selling this product
+      allow delete: if isAdmin() || isShopOwner(resource.data.shopId);
+    }
+
+    // =========================================================================
+    // ORDERS COLLECTION (/orders/{orderId})
+    // =========================================================================
+    match /orders/{orderId} {
+      // 1. Read:
+      //    - Customers can read their own orders
+      //    - Admins can read all orders
+      //    - Shopkeeper can read orders if their shop is associated with it
+      allow read: if isAdmin() ||
+        (isAuthenticated() && resource.data.customerId == request.auth.uid) ||
+        (isAuthenticated() && ('shopId' in resource.data) && isShopOwner(resource.data.shopId));
+
+      // 2. Create:
+      //    - Admins can create orders
+      //    - Authenticated customer can create their own order with initial 'placed' status
+      //    - Crucial: Cannot self-issue points (pointsCredited & referralRewardCredited must be false)
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.orderStatus == 'placed' &&
+        request.resource.data.pointsCredited == false &&
+        request.resource.data.referralRewardCredited == false &&
+        request.resource.data.totalAmount is number && request.resource.data.totalAmount >= 0 &&
+        request.resource.data.subtotal is number && request.resource.data.subtotal >= 0
+      );
+
+      // 3. Update:
+      //    - Admins can update any order (refund, status change, notes)
+      //    - Customer can cancel their own order ONLY while status is 'placed'
+      //      and cannot alter amounts, points, or items
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.orderStatus == 'placed' &&
+        request.resource.data.orderStatus in ['placed', 'cancelled'] &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.totalAmount == resource.data.totalAmount &&
+        request.resource.data.subtotal == resource.data.subtotal &&
+        request.resource.data.pointsUsed == resource.data.pointsUsed &&
+        request.resource.data.pointsEarned == resource.data.pointsEarned &&
+        request.resource.data.pointsCredited == resource.data.pointsCredited &&
+        request.resource.data.referralRewardCredited == resource.data.referralRewardCredited
+      );
+
+      // 4. Delete: Strictly restricted to maintain financial and order audit history
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // POINT TRANSACTIONS LEDGER (/pointTransactions/{txId})
+    // =========================================================================
+    match /pointTransactions/{txId} {
+      // 1. Read:
+      //    - Users can read only their own point transactions
+      //    - Admins can read all transactions
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+
+      // 2. Create:
+      //    - Admins can create any transaction
+      //    - Customers can only record negative deductions for checkout discounts or transfer send
+      //      (POSITIVE points can NEVER be forged or credited directly by client)
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.points is number &&
+        request.resource.data.points < 0 &&
+        request.resource.data.type in ['checkout_discount', 'transfer_sent']
+      );
+
+      // 3. Immutability: Point ledger records can NEVER be updated or deleted
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // POINT TRANSFER REQUESTS (/pointTransferRequests/{requestId})
+    // =========================================================================
+    match /pointTransferRequests/{requestId} {
+      // 1. Read:
+      //    - Sender or recipient can read the request
+      //    - Admins can read all requests
+      allow read: if isAdmin() || (
+        isAuthenticated() && (
+          resource.data.senderId == request.auth.uid ||
+          resource.data.recipientId == request.auth.uid ||
+          (('recipientEmail' in resource.data) && resource.data.recipientEmail == request.auth.token.email)
+        )
+      );
+
+      // 2. Create:
+      //    - Authenticated sender initiates a transfer with pending status
+      //    - Must be a positive amount
+      //    - Self-transfers strictly prevented
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.points is number &&
+        request.resource.data.points > 0 &&
+        request.resource.data.senderId != request.resource.data.recipientId &&
+        (!('recipientEmail' in request.resource.data) || request.resource.data.recipientEmail != request.auth.token.email)
+      );
+
+      // 3. Update:
+      //    - Admins can update
+      //    - Recipient can approve or reject a pending transfer
+      //    - Sender can cancel their pending transfer
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.status == 'pending' &&
+        (
+          // Recipient approval/rejection
+          (
+            (resource.data.recipientId == request.auth.uid ||
+             (('recipientEmail' in resource.data) && resource.data.recipientEmail == request.auth.token.email)) &&
+            request.resource.data.status in ['approved', 'rejected']
+          ) ||
+          // Sender cancellation
+          (
+            resource.data.senderId == request.auth.uid &&
+            request.resource.data.status == 'cancelled'
+          )
+        ) &&
+        request.resource.data.senderId == resource.data.senderId &&
+        request.resource.data.points == resource.data.points
+      );
+
+      // 4. Delete: Only administrators
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // REFERRALS COLLECTION (/referrals/{referralId})
+    // =========================================================================
+    match /referrals/{referralId} {
+      // 1. Read:
+      //    - Referrer can inspect referrals attributed to them
+      //    - Referred user can view their referral record
+      //    - Admins can view all referrals
+      allow read: if isAdmin() || (
+        isAuthenticated() && (
+          resource.data.referrerUserId == request.auth.uid ||
+          resource.data.referredUserId == request.auth.uid
+        )
+      );
+
+      // 2. Create:
+      //    - New customer registers with a valid referral code
+      //    - Self-referrals strictly prevented
+      //    - Initial status must be 'registered'
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.referredUserId == request.auth.uid &&
+        request.resource.data.referrerUserId != request.auth.uid &&
+        request.resource.data.status == 'registered' &&
+        request.resource.data.rewardPoints is number &&
+        request.resource.data.rewardPoints > 0
+      );
+
+      // 3. Update:
+      //    - Only Admins or backend functions can mark referrals as 'reward_issued'
+      //      (prevents customers from self-crediting bonuses)
+      allow update: if isAdmin();
+
+      // 4. Delete: Only Admins
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // ADMIN SETTINGS (/adminSettings/{settingId})
+    // =========================================================================
+    match /adminSettings/{settingId} {
+      // 1. Read: Authenticated users can read conversion rates, bonus rules, delivery tiers
+      allow read: if isAuthenticated();
+
+      // 2. Write: Only administrators can update platform settings
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // AUDIT LOGS (/auditLogs/{logId})
+    // =========================================================================
+    match /auditLogs/{logId} {
+      // 1. Read: Strictly administrators
+      allow read: if isAdmin();
+
+      // 2. Create: Administrators or backend processes
+      allow create: if isAdmin();
+
+      // 3. Update & Delete: Strictly prohibited to guarantee immutable audit trails
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // NOTIFICATIONS (/notifications/{notificationId})
+    // =========================================================================
+    match /notifications/{notificationId} {
+      // 1. Read: Recipient user or administrators
+      allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
+
+      // 2. Create: Admins or permitted notification sender
+      allow create: if isAdmin() || isAuthenticated();
+
+      // 3. Update: User can update read status of their own notifications
+      allow update: if isAdmin() || (
+        isOwner(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+      );
+
+      // 4. Delete: Owner or administrator
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // =========================================================================
+    // CARTS COLLECTION (/cart/{cartId})
+    // =========================================================================
+    match /cart/{cartId} {
+      allow read, write: if isOwner(cartId) || isAdmin();
+    }
+
+    // =========================================================================
+    // CATCH-ALL DEFAULT DENY
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

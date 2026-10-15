@@ -1,0 +1,6 @@
+{
+  "name": "REFERO — Multi-Vendor Marketplace & Rewards",
+  "description": "Multi-vendor ecommerce marketplace with REFERO Points, role-based dashboards, and Bangladesh payment support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
