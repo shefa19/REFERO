@@ -16,6 +16,7 @@ import productOrganicGheeImg from '../assets/images/product_organic_ghee_1791967
 import productPremiumTeaImg from '../assets/images/product_premium_tea_1791967747037.jpg';
 import productMustardOilImg from '../assets/images/product_mustard_oil_1791967746741.jpg';
 import productHoneyRawImg from '../assets/images/product_honey_raw_1791967747419.jpg';
+import ciniguraCalImg from '../assets/images/cinigura cal.jpg';
 
 // High-resolution bundled assets with proper Vite ES module imports
 export const SEED_ASSETS = {
@@ -24,6 +25,7 @@ export const SEED_ASSETS = {
   tea: productPremiumTeaImg,
   mustardOil: productMustardOilImg,
   honey: productHoneyRawImg,
+  cinigura: ciniguraCalImg,
 };
 
 export const INITIAL_POINTS_CONFIG: PointsConfig = {
@@ -285,7 +287,7 @@ export const DEMO_PRODUCTS: Product[] = [
     originalPrice: 220,
     discountPercent: 11,
     stock: 60,
-    images: [SEED_ASSETS.hero],
+    images: [SEED_ASSETS.cinigura],
     unit: '1kg air-sealed bag',
     pointsEarned: 0, // 0 means platform fallback calculation (5%)
     canRedeemWithPoints: true,

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatBDT, formatPoints } from '../../utils/formatters';
+import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
 import {
   X,
   Star,
@@ -101,10 +102,13 @@ export const ProductDetailModal: React.FC = () => {
             <div className="space-y-3">
               <div className="relative aspect-4/3 rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
                 <img
-                  src={product.images[0]}
+                  src={resolveProductImage(product.images?.[0])}
                   alt={product.title}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = IMAGE_ASSETS.defaultProduct;
+                  }}
                 />
                 {product.discountPercent && product.discountPercent > 0 && (
                   <span className="absolute top-3 left-3 px-2 py-0.5 bg-[#F47B44] text-white text-xs font-bold rounded">

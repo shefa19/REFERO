@@ -29,6 +29,7 @@ import {
 } from '../data/seedData';
 import { calculateEarnedPoints, pointsToBdt } from '../utils/formatters';
 import { cleanUndefinedFields } from '../utils/cleaners';
+import { resolveProductImage } from '../utils/imageAssets';
 import { db, isFirebaseConfigured } from '../services/firebase/config';
 import { callAcceptPointTransfer, callDeclinePointTransfer } from '../services/firebase/functionsClient';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, limit, runTransaction } from 'firebase/firestore';
@@ -278,10 +279,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const productsSnap = await getDocs(collection(activeDb, 'products'));
         if (isMounted) {
           if (productsSnap.docs.length > 0) {
-            const loadedProducts = productsSnap.docs.map((docSnap) => ({
-              id: docSnap.id,
-              ...docSnap.data(),
-            })) as Product[];
+            const loadedProducts = productsSnap.docs.map((docSnap) => {
+              const data = docSnap.data();
+              const rawImages = Array.isArray(data.images)
+                ? data.images
+                : (data.image ? [data.image] : []);
+              const resolvedImages = rawImages.map((img: string) => resolveProductImage(img));
+              if (resolvedImages.length === 0) {
+                resolvedImages.push(resolveProductImage());
+              }
+              return {
+                id: docSnap.id,
+                ...data,
+                images: resolvedImages,
+              };
+            }) as Product[];
             setProducts(loadedProducts);
             setDataSources((prev) => ({ ...prev, products: 'live' }));
           } else {
@@ -331,10 +343,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const ordersSnap = await getDocs(ordersQuery);
             if (isMounted) {
               if (ordersSnap.docs.length > 0) {
-                const loadedOrders = ordersSnap.docs.map((docSnap) => ({
-                  id: docSnap.id,
-                  ...docSnap.data(),
-                })) as Order[];
+                const loadedOrders = ordersSnap.docs.map((docSnap) => {
+                  const oData = docSnap.data();
+                  const sanitizedItems = Array.isArray(oData.items)
+                    ? oData.items.map((it: OrderItem) => ({
+                        ...it,
+                        image: resolveProductImage(it.image),
+                      }))
+                    : [];
+                  return {
+                    id: docSnap.id,
+                    ...oData,
+                    items: sanitizedItems,
+                  };
+                }) as Order[];
                 setOrders(loadedOrders);
                 setDataSources((prev) => ({ ...prev, orders: 'live' }));
               } else {
@@ -830,7 +852,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       title: item.product.title,
       price: item.product.price,
       quantity: item.quantity,
-      image: item.product.images[0],
+      image: resolveProductImage(item.product.images[0]),
       shopId: item.product.shopId,
       shopName: item.product.shopName,
       unit: item.product.unit,
