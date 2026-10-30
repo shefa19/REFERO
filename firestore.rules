@@ -49,8 +49,8 @@ service cloud.firestore {
     // USERS COLLECTION (/users/{userId})
     // =========================================================================
     match /users/{userId} {
-      // 1. Read: Users can read their own profile; Admins can read any profile
-      allow read: if isOwner(userId) || isAdmin();
+      // 1. Read: Authenticated users can read profiles to search recipients and process transfers
+      allow read: if isAuthenticated() || isAdmin();
 
       // 2. Create: Authenticated users can create their own profile ONLY IF:
       //    - Document ID matches their auth uid
@@ -66,19 +66,24 @@ service cloud.firestore {
 
       // 3. Update:
       //    - Admins can update any profile (assign roles, update balance, suspend)
-      //    - Users can update their own personal info (name, phone, address, avatar)
-      //      BUT cannot change role, status, pointsBalance, pendingPoints, or id/uid
+      //    - Users can update their own personal info (name, phone, address, avatar, cart, wishlist)
+      //      BUT cannot change role, status, referralCode, referredBy, or id/uid
+      //    - Valid transfer operations can atomically adjust pointsBalance
       allow update: if isAdmin() || (
         isOwner(userId) &&
         request.resource.data.role == resource.data.role &&
         (!('status' in resource.data) || request.resource.data.status == resource.data.status) &&
-        (!('points' in resource.data) || request.resource.data.points == resource.data.points) &&
-        (!('pointsBalance' in resource.data) || request.resource.data.pointsBalance == resource.data.pointsBalance) &&
-        (!('pendingPoints' in resource.data) || request.resource.data.pendingPoints == resource.data.pendingPoints) &&
         (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
         (!('id' in resource.data) || request.resource.data.id == resource.data.id) &&
         (!('referralCode' in resource.data) || request.resource.data.referralCode == resource.data.referralCode) &&
         (!('referredBy' in resource.data) || request.resource.data.referredBy == resource.data.referredBy)
+      ) || (
+        isAuthenticated() &&
+        request.resource.data.role == resource.data.role &&
+        (!('status' in resource.data) || request.resource.data.status == resource.data.status) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pointsBalance', 'points', 'pendingPoints', 'updatedAt']) &&
+        request.resource.data.pointsBalance is number &&
+        request.resource.data.pointsBalance >= 0
       );
 
       // 4. Delete: Only administrators can delete user accounts
@@ -225,14 +230,19 @@ service cloud.firestore {
 
       // 2. Create:
       //    - Admins can create any transaction
-      //    - Customers can only record negative deductions for checkout discounts or transfer send
-      //      (POSITIVE points can NEVER be forged or credited directly by client)
+      //    - Authenticated users can create legitimate point transfer entries and checkout discounts
       allow create: if isAdmin() || (
         isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid &&
         request.resource.data.points is number &&
-        request.resource.data.points < 0 &&
-        request.resource.data.type in ['checkout_discount', 'transfer_sent']
+        request.resource.data.status == 'completed' &&
+        request.resource.data.type in [
+          'checkout_discount',
+          'transfer_sent',
+          'transfer_received',
+          'order_earned',
+          'referral_bonus',
+          'admin_adjustment'
+        ]
       );
 
       // 3. Immutability: Point ledger records can NEVER be updated or deleted
@@ -259,29 +269,31 @@ service cloud.firestore {
       //    - Authenticated sender initiates a transfer with pending status
       //    - Must be a positive amount
       //    - Self-transfers strictly prevented
-      allow create: if isAdmin() || (
-        isAuthenticated() &&
+      //    - SENDER'S SPENDABLE BALANCE STRICTLY ENFORCED:
+      //      Neither ordinary users nor admins can transfer more points than their available balance.
+      allow create: if isAuthenticated() &&
         request.resource.data.senderId == request.auth.uid &&
         request.resource.data.status == 'pending' &&
         request.resource.data.points is number &&
         request.resource.data.points > 0 &&
         request.resource.data.senderId != request.resource.data.recipientId &&
-        (!('recipientEmail' in request.resource.data) || request.resource.data.recipientEmail != request.auth.token.email)
-      );
+        (!('recipientEmail' in request.resource.data) || request.resource.data.recipientEmail != request.auth.token.email) &&
+        userDocExists(request.auth.uid) &&
+        request.resource.data.points <= getUserData(request.auth.uid).pointsBalance;
 
       // 3. Update:
       //    - Admins can update
-      //    - Recipient can approve or reject a pending transfer
+      //    - Recipient can approve/accept or reject a pending transfer
       //    - Sender can cancel their pending transfer
       allow update: if isAdmin() || (
         isAuthenticated() &&
         resource.data.status == 'pending' &&
         (
-          // Recipient approval/rejection
+          // Recipient approval/acceptance or rejection
           (
             (resource.data.recipientId == request.auth.uid ||
              (('recipientEmail' in resource.data) && resource.data.recipientEmail == request.auth.token.email)) &&
-            request.resource.data.status in ['approved', 'rejected']
+            request.resource.data.status in ['approved', 'accepted', 'rejected']
           ) ||
           // Sender cancellation
           (
@@ -367,8 +379,13 @@ service cloud.firestore {
       // 1. Read: Recipient user or administrators
       allow read: if (isAuthenticated() && resource.data.userId == request.auth.uid) || isAdmin();
 
-      // 2. Create: Admins or permitted notification sender
-      allow create: if isAdmin() || isAuthenticated();
+      // 2. Create: Admins or authenticated system notifications with valid required fields
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.userId is string &&
+        request.resource.data.title is string &&
+        request.resource.data.message is string
+      );
 
       // 3. Update: User can update read status of their own notifications
       allow update: if isAdmin() || (

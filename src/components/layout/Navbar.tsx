@@ -19,10 +19,21 @@ import {
   LogOut,
   Gift,
   Bell,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { currentUser, userRole, switchDemoRole, logout } = useAuth();
+  const {
+    currentUser,
+    userRole,
+    isRealAdmin,
+    isAdminPreviewActive,
+    previewRole,
+    enterPreview,
+    exitAdminPreview,
+    logout,
+  } = useAuth();
   const {
     currentView,
     navigateTo,
@@ -46,9 +57,10 @@ export const Navbar: React.FC = () => {
 
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  const userNotifications = notifications.filter(
-    (n) => !currentUser || n.userId === currentUser.id || currentUser.role === 'admin'
-  );
+  // Strictly isolate user notifications - never expose previous account or admin notifications to guests
+  const userNotifications = currentUser
+    ? notifications.filter((n) => n.userId === currentUser.id || (!n.userId && currentUser.role === 'admin'))
+    : [];
   const unreadCount = userNotifications.filter((n) => !n.read).length;
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -59,55 +71,63 @@ export const Navbar: React.FC = () => {
     }
   };
 
-  const handleRoleSelect = (role: 'admin' | 'shopkeeper' | 'customer' | 'guest') => {
-    switchDemoRole(role);
+  const handleRoleSelect = (role: 'customer' | 'seller' | 'guest' | 'exit') => {
     setIsRoleDropdownOpen(false);
-    // Redirect to respective dashboard when switched
-    if (role === 'admin') navigateTo('admin_dashboard');
-    else if (role === 'shopkeeper') navigateTo('shopkeeper_dashboard');
-    else if (role === 'customer') navigateTo('customer_dashboard');
-    else navigateTo('home');
+    if (role === 'exit') {
+      exitAdminPreview();
+      navigateTo('admin_dashboard');
+    } else {
+      enterPreview(role);
+      if (role === 'customer') navigateTo('customer_dashboard');
+      else if (role === 'seller') navigateTo('shopkeeper_dashboard');
+      else if (role === 'guest') navigateTo('home');
+    }
   };
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200/80 shadow-xs">
-      {/* 1. Announcement Bar */}
+      {/* Admin University Demo Sandbox Active Banner */}
+      {isAdminPreviewActive && (
+        <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 text-white text-xs px-4 py-2 border-b border-amber-500/40 shadow-sm">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-block w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+              <span className="font-bold">University Demo Preview:</span>
+              <span className="bg-white/20 px-2 py-0.5 rounded font-bold uppercase tracking-wider text-[11px]">
+                {previewRole === 'customer'
+                  ? '🛍️ Demo Customer (Moumita)'
+                  : previewRole === 'seller'
+                  ? '🏪 Demo Seller (Green Valley Organics)'
+                  : '👤 Guest Public Visitor'}
+              </span>
+              <span className="text-amber-100 hidden md:inline text-[11px]">
+                · Real Admin session preserved in background (Production database safe)
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                exitAdminPreview();
+                navigateTo('admin_dashboard');
+              }}
+              className="bg-white hover:bg-amber-50 text-orange-950 font-bold px-3 py-1 rounded-lg text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs shrink-0"
+              title="Return to real Admin Console"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-orange-700" />
+              <span>Exit Preview</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 1. Announcement Bar (Public view with verified hotline) */}
       <div className="bg-[#142B4A] text-white text-xs py-1.5 px-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-[#F47B44]">Dhaka Delivery:</span>
             <span>Free shipping on all orders over ৳999 · Earn up to 10% back in REFERO Points</span>
           </div>
-          <div className="hidden sm:flex items-center gap-4 text-[11px] text-slate-300">
-            <button
-              onClick={() => navigateTo('policy_points')}
-              className="hover:text-white transition-colors cursor-pointer"
-            >
-              Points Policy
-            </button>
-            <span>·</span>
-            <button
-              onClick={() => navigateTo('help_center')}
-              className="hover:text-white transition-colors cursor-pointer"
-            >
-              Help & Support
-            </button>
-            <span>·</span>
-            <button
-              onClick={openSellerModal}
-              className="inline-flex items-center gap-1 text-[#F47B44] hover:text-white font-medium transition-colors cursor-pointer"
-            >
-              <Store className="w-3 h-3" />
-              <span>Become a Seller</span>
-            </button>
-            <span>·</span>
-            <button
-              onClick={openFirebaseModal}
-              className="inline-flex items-center gap-1 text-[#F47B44] hover:text-white font-medium transition-colors cursor-pointer"
-            >
-              <Database className="w-3 h-3" />
-              <span>Firebase Status</span>
-            </button>
+          <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-300">
+            <span>Customer Hotline: +880 1717 026630</span>
           </div>
         </div>
       </div>
@@ -151,53 +171,92 @@ export const Navbar: React.FC = () => {
 
           {/* Action Zone: Points Badge, Role Switcher, Wishlist, Cart, Profile */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* University Class Role Switcher (Crucial for live presentation) */}
-            <div className="relative">
-              <button
-                onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
-                className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer"
-                title="Switch role for University demonstration"
-              >
-                <Layers className="w-3.5 h-3.5 text-[#F47B44]" />
-                <span className="capitalize font-semibold text-[#142B4A]">{userRole}</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </button>
+            {/* University Class Role Switcher (Strictly accessible to verified Admins) */}
+            {isRealAdmin && (
+              <div className="relative">
+                <button
+                  onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
+                  className={`hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                    isAdminPreviewActive
+                      ? 'bg-amber-50 border-amber-300 text-amber-900 font-semibold shadow-xs'
+                      : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                  }`}
+                  title="Switch role for University demonstration"
+                >
+                  <Layers className={`w-3.5 h-3.5 ${isAdminPreviewActive ? 'text-amber-600' : 'text-[#F47B44]'}`} />
+                  <span className="capitalize font-semibold text-[#142B4A]">
+                    {isAdminPreviewActive
+                      ? previewRole === 'customer'
+                        ? 'Preview: Customer'
+                        : previewRole === 'seller'
+                        ? 'Preview: Seller'
+                        : 'Preview: Guest'
+                      : 'Demo Role'}
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                </button>
 
-              {isRoleDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-50 text-xs">
-                  <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-                    Switch Role for Demo
+                {isRoleDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-50 text-xs">
+                    <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
+                      <span>University Role Preview</span>
+                      <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded font-mono">Admin Only</span>
+                    </div>
+                    <button
+                      onClick={() => handleRoleSelect('customer')}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${previewRole === 'customer' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🛍️</span>
+                        <div>
+                          <p className="font-semibold text-xs text-slate-800">Demo Customer</p>
+                          <p className="text-[10px] text-slate-400">Moumita Pramanik (840 pts)</p>
+                        </div>
+                      </div>
+                      {previewRole === 'customer' && <span className="text-[10px] text-[#F47B44] font-bold">Active</span>}
+                    </button>
+                    <button
+                      onClick={() => handleRoleSelect('seller')}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${previewRole === 'seller' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🏪</span>
+                        <div>
+                          <p className="font-semibold text-xs text-slate-800">Demo Seller / Shopkeeper</p>
+                          <p className="text-[10px] text-slate-400">Green Valley Organics</p>
+                        </div>
+                      </div>
+                      {previewRole === 'seller' && <span className="text-[10px] text-[#F47B44] font-bold">Active</span>}
+                    </button>
+                    <button
+                      onClick={() => handleRoleSelect('guest')}
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${previewRole === 'guest' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">👤</span>
+                        <div>
+                          <p className="font-semibold text-xs text-slate-800">Guest Preview</p>
+                          <p className="text-[10px] text-slate-400">Unauthenticated visitor</p>
+                        </div>
+                      </div>
+                      {previewRole === 'guest' && <span className="text-[10px] text-[#F47B44] font-bold">Active</span>}
+                    </button>
+
+                    {isAdminPreviewActive && (
+                      <div className="border-t border-slate-100 mt-1 pt-1">
+                        <button
+                          onClick={() => handleRoleSelect('exit')}
+                          className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-amber-50 text-amber-800 font-bold"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-orange-700" />
+                          <span>Exit Preview (Back to Admin Console)</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <button
-                    onClick={() => handleRoleSelect('admin')}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${userRole === 'admin' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
-                  >
-                    <span>🛡️ Shefaul Islam (Admin)</span>
-                    {userRole === 'admin' && <span className="text-[10px] text-[#F47B44]">Active</span>}
-                  </button>
-                  <button
-                    onClick={() => handleRoleSelect('shopkeeper')}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${userRole === 'shopkeeper' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
-                  >
-                    <span>🏪 Mahinur (Green Valley Shop)</span>
-                    {userRole === 'shopkeeper' && <span className="text-[10px] text-[#F47B44]">Active</span>}
-                  </button>
-                  <button
-                    onClick={() => handleRoleSelect('customer')}
-                    className={`w-full text-left px-3 py-2 flex items-center justify-between hover:bg-slate-50 ${userRole === 'customer' ? 'bg-[#EAF3FF] font-semibold text-[#142B4A]' : 'text-slate-700'}`}
-                  >
-                    <span>🛍️ Moumita (Customer)</span>
-                    {userRole === 'customer' && <span className="text-[10px] text-[#F47B44]">Active</span>}
-                  </button>
-                  <button
-                    onClick={() => handleRoleSelect('guest')}
-                    className="w-full text-left px-3 py-2 text-slate-500 hover:bg-slate-50"
-                  >
-                    <span>👤 Guest Mode</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
             {/* REFERO Points Balance Badge */}
             {currentUser && (
@@ -214,10 +273,7 @@ export const Navbar: React.FC = () => {
 
             {/* Wishlist */}
             <button
-              onClick={() => {
-                if (currentUser) navigateTo('customer_dashboard');
-                else openAuthModal('login');
-              }}
+              onClick={() => navigateTo('wishlist')}
               className="relative p-2 text-slate-600 hover:text-[#142B4A] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
               aria-label="Wishlist"
               title="Saved items"
@@ -274,21 +330,58 @@ export const Navbar: React.FC = () => {
                       userNotifications.map((notif) => (
                         <div
                           key={notif.id}
-                          onClick={() => markNotificationAsRead(notif.id)}
-                          className={`p-3 hover:bg-slate-50 transition-colors cursor-pointer ${
+                          onClick={() => {
+                            markNotificationAsRead(notif.id);
+                            if (notif.link === 'transfers' || notif.type === 'transfer') {
+                              navigateTo('customer_dashboard', { customerTab: 'transfers' });
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'referrals') {
+                              navigateTo('customer_dashboard', { customerTab: 'referrals' });
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'orders' || notif.type === 'order') {
+                              navigateTo('customer_dashboard', { customerTab: 'orders' });
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'points') {
+                              navigateTo('customer_dashboard', { customerTab: 'points' });
+                              setIsNotificationsOpen(false);
+                            }
+                          }}
+                          className={`p-3 hover:bg-slate-50 transition-colors cursor-pointer group ${
                             !notif.read ? 'bg-blue-50/40' : ''
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <h5 className="font-semibold text-slate-800 text-[11px]">{notif.title}</h5>
+                            <span className="font-semibold text-slate-800 text-[11px] flex items-center gap-1.5">
+                              {notif.type === 'transfer' && (
+                                <span className="px-1.5 py-0.2 bg-[#F47B44]/10 text-[#F47B44] text-[9px] rounded font-bold uppercase">
+                                  Transfer
+                                </span>
+                              )}
+                              {notif.type === 'points' && (
+                                <span className="px-1.5 py-0.2 bg-emerald-50 text-emerald-700 text-[9px] rounded font-bold uppercase">
+                                  Points
+                                </span>
+                              )}
+                              {notif.type === 'order' && (
+                                <span className="px-1.5 py-0.2 bg-blue-50 text-blue-700 text-[9px] rounded font-bold uppercase">
+                                  Order
+                                </span>
+                              )}
+                              {notif.title}
+                            </span>
                             {!notif.read && (
                               <span className="w-2 h-2 rounded-full bg-[#F47B44] shrink-0" />
                             )}
                           </div>
-                          <p className="text-[11px] text-slate-600 mt-0.5">{notif.message}</p>
-                          <span className="text-[9px] text-slate-400 mt-1 block">
-                            {new Date(notif.createdAt).toLocaleDateString()}
-                          </span>
+                          <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">{notif.message}</p>
+                          <div className="flex items-center justify-between mt-1.5 text-[9px] text-slate-400">
+                            <span>{new Date(notif.createdAt).toLocaleDateString()}</span>
+                            {(notif.link || notif.type === 'transfer') && (
+                              <span className="text-[#142B4A] font-semibold group-hover:text-[#F47B44] transition-colors">
+                                View details &rarr;
+                              </span>
+                            )}
+                          </div>
                         </div>
                       ))
                     )}
@@ -509,19 +602,6 @@ export const Navbar: React.FC = () => {
             >
               How Points Work
             </button>
-            <button
-              onClick={() => {
-                if (currentUser?.role === 'shopkeeper') {
-                  navigateTo('shopkeeper_dashboard');
-                } else {
-                  navigateTo('shopkeeper_dashboard');
-                }
-              }}
-              className="ml-auto text-slate-500 hover:text-[#142B4A] transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1"
-            >
-              <Store className="w-3.5 h-3.5 text-slate-400" />
-              <span>Seller Portal</span>
-            </button>
           </nav>
         </div>
       </div>
@@ -529,38 +609,57 @@ export const Navbar: React.FC = () => {
       {/* Mobile Drawer */}
       {isMobileMenuOpen && (
         <div className="md:hidden border-t border-slate-200 bg-white px-4 py-3 space-y-2 text-xs">
-          <div className="font-semibold text-slate-400 uppercase text-[10px] tracking-wider mb-1">
-            Demo Role Switch
-          </div>
-          <div className="grid grid-cols-3 gap-1.5 pb-2 border-b border-slate-100">
-            <button
-              onClick={() => {
-                handleRoleSelect('customer');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`py-1.5 rounded-md border text-center ${userRole === 'customer' ? 'bg-[#142B4A] text-white' : 'border-slate-200'}`}
-            >
-              Customer
-            </button>
-            <button
-              onClick={() => {
-                handleRoleSelect('shopkeeper');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`py-1.5 rounded-md border text-center ${userRole === 'shopkeeper' ? 'bg-[#142B4A] text-white' : 'border-slate-200'}`}
-            >
-              Shopkeeper
-            </button>
-            <button
-              onClick={() => {
-                handleRoleSelect('admin');
-                setIsMobileMenuOpen(false);
-              }}
-              className={`py-1.5 rounded-md border text-center ${userRole === 'admin' ? 'bg-[#142B4A] text-white' : 'border-slate-200'}`}
-            >
-              Admin
-            </button>
-          </div>
+          {isRealAdmin && (
+            <>
+              <div className="font-semibold text-slate-400 uppercase text-[10px] tracking-wider mb-1 flex items-center justify-between">
+                <span>University Demo Preview</span>
+                {isAdminPreviewActive && (
+                  <button
+                    onClick={() => {
+                      exitAdminPreview();
+                      navigateTo('admin_dashboard');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="text-orange-600 font-bold hover:underline cursor-pointer"
+                  >
+                    Exit Preview
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 pb-2 border-b border-slate-100">
+                <button
+                  onClick={() => {
+                    enterPreview('customer');
+                    navigateTo('customer_dashboard');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`py-1.5 rounded-md border text-center text-[11px] cursor-pointer ${previewRole === 'customer' ? 'bg-[#142B4A] text-white font-bold' : 'border-slate-200'}`}
+                >
+                  Customer
+                </button>
+                <button
+                  onClick={() => {
+                    enterPreview('seller');
+                    navigateTo('shopkeeper_dashboard');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`py-1.5 rounded-md border text-center text-[11px] cursor-pointer ${previewRole === 'seller' ? 'bg-[#142B4A] text-white font-bold' : 'border-slate-200'}`}
+                >
+                  Seller
+                </button>
+                <button
+                  onClick={() => {
+                    enterPreview('guest');
+                    navigateTo('home');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`py-1.5 rounded-md border text-center text-[11px] cursor-pointer ${previewRole === 'guest' ? 'bg-[#142B4A] text-white font-bold' : 'border-slate-200'}`}
+                >
+                  Guest
+                </button>
+              </div>
+            </>
+          )}
 
           <div className="font-semibold text-slate-400 uppercase text-[10px] tracking-wider mt-2 mb-1">
             Navigation
@@ -571,7 +670,7 @@ export const Navbar: React.FC = () => {
               navigateTo('home');
               setIsMobileMenuOpen(false);
             }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
+            className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
           >
             Home
           </button>
@@ -581,7 +680,7 @@ export const Navbar: React.FC = () => {
               navigateTo('products');
               setIsMobileMenuOpen(false);
             }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
+            className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
           >
             All Products
           </button>
@@ -591,46 +690,46 @@ export const Navbar: React.FC = () => {
               navigateTo('products');
               setIsMobileMenuOpen(false);
             }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
+            className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
           >
             Groceries & Organics
           </button>
           <button
             onClick={() => {
-              navigateTo('customer_dashboard');
+              navigateTo('wishlist');
               setIsMobileMenuOpen(false);
             }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
+            className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer flex items-center justify-between"
           >
-            Customer Dashboard & Points
+            <span>My Saved Wishlist</span>
+            {wishlist.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-[#F47B44] text-white text-[10px] font-bold">
+                {wishlist.length}
+              </span>
+            )}
           </button>
-          <button
-            onClick={() => {
-              navigateTo('shopkeeper_dashboard');
-              setIsMobileMenuOpen(false);
-            }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
-          >
-            Shopkeeper Dashboard
-          </button>
-          <button
-            onClick={() => {
-              navigateTo('admin_dashboard');
-              setIsMobileMenuOpen(false);
-            }}
-            className="w-full text-left py-1.5 text-slate-700 font-medium"
-          >
-            Admin Dashboard
-          </button>
-          <button
-            onClick={() => {
-              openFirebaseModal();
-              setIsMobileMenuOpen(false);
-            }}
-            className="w-full text-left py-1.5 text-[#F47B44] font-semibold"
-          >
-            Firebase Config & Status
-          </button>
+          {currentUser && (
+            <button
+              onClick={() => {
+                navigateTo('customer_dashboard');
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
+            >
+              Customer Dashboard & Points
+            </button>
+          )}
+          {isRealAdmin && (
+            <button
+              onClick={() => {
+                navigateTo('admin_dashboard');
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full text-left py-1.5 text-[#142B4A] font-bold cursor-pointer"
+            >
+              Admin Dashboard
+            </button>
+          )}
         </div>
       )}
     </header>

@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT, formatPoints, formatDate, formatDateTime } from '../../utils/formatters';
-import { UserRole, Shop } from '../../types';
+import { UserRole, Shop, UserProfile } from '../../types';
 import { DEMO_USERS } from '../../data/seedData';
+import { collection, getDocs } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '../../services/firebase/config';
 import {
   ShieldCheck,
   Users,
@@ -26,7 +28,10 @@ import {
   X,
   Filter,
   Clock,
+  Database,
+  UploadCloud,
 } from 'lucide-react';
+import { migrateDemoDataToFirestore, MigrationSummary } from '../../services/firebase/migrationService';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -45,7 +50,11 @@ export const AdminDashboard: React.FC = () => {
     requestShopInfo,
     processRefund,
     updateUserRoleAction,
+    adjustUserPoints,
     showToast,
+    dataSources,
+    navigateTo,
+    openAuthModal,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
@@ -65,6 +74,52 @@ export const AdminDashboard: React.FC = () => {
   // User Management State
   const [userList, setUserList] = useState(DEMO_USERS);
   const [userSearch, setUserSearch] = useState('');
+
+  // Administrative Point Adjustment State (Strictly separated from customer-to-customer gifting)
+  const [adjustModalUser, setAdjustModalUser] = useState<UserProfile | null>(null);
+  const [adjustDelta, setAdjustDelta] = useState<number>(100);
+  const [adjustType, setAdjustType] = useState<'credit' | 'debit'>('credit');
+  const [adjustReason, setAdjustReason] = useState<string>('');
+  const [isAdjusting, setIsAdjusting] = useState<boolean>(false);
+
+  // Permanent Demo Data Migration State
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<MigrationSummary | null>(null);
+
+  const handleMigrateData = async () => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Admin authorization required to run migration.');
+      return;
+    }
+    setIsMigrating(true);
+    try {
+      const res = await migrateDemoDataToFirestore(currentUser.id);
+      setMigrationResult(res);
+      showToast(`Migration complete! ${res.usersMigrated} users, ${res.shopsMigrated} shops, ${res.productsMigrated} products added to Firebase.`);
+    } catch (err: any) {
+      showToast(`Migration error: ${err.message}`);
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isFirebaseConfigured() && db && currentUser?.role === 'admin') {
+      getDocs(collection(db, 'users'))
+        .then((snap) => {
+          if (snap.docs.length > 0) {
+            const list = snap.docs.map((d) => ({
+              id: d.id,
+              ...d.data(),
+            })) as UserProfile[];
+            setUserList(list);
+          }
+        })
+        .catch((err) => {
+          console.warn('Firestore users fetch note in AdminDashboard:', err);
+        });
+    }
+  }, [currentUser?.role, migrationResult]);
 
   // Calculations
   const totalSales = orders
@@ -168,6 +223,32 @@ export const AdminDashboard: React.FC = () => {
     updateUserRoleAction(userId, newRole);
   };
 
+  const handleAdjustPointsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adjustModalUser) return;
+    if (!adjustReason || adjustReason.trim().length < 5) {
+      showToast('A mandatory audit reason (minimum 5 characters) is required.', 'error');
+      return;
+    }
+    const delta = adjustType === 'credit' ? Math.abs(adjustDelta) : -Math.abs(adjustDelta);
+    setIsAdjusting(true);
+    const res = await adjustUserPoints(adjustModalUser.id, delta, adjustReason);
+    setIsAdjusting(false);
+    if (res.success) {
+      setUserList((prev) =>
+        prev.map((u) =>
+          u.id === adjustModalUser.id
+            ? { ...u, pointsBalance: Math.max(0, u.pointsBalance + delta) }
+            : u
+        )
+      );
+      setAdjustModalUser(null);
+      setAdjustReason('');
+    } else {
+      showToast(res.message, 'error');
+    }
+  };
+
   const handleRejectShop = (shop: Shop) => {
     openActionModal(
       'reject',
@@ -214,6 +295,66 @@ export const AdminDashboard: React.FC = () => {
       false
     );
   };
+
+  if (!currentUser) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+          <div className="w-16 h-16 rounded-2xl bg-[#142B4A] text-[#F47B44] flex items-center justify-center mx-auto mb-4">
+            <ShieldCheck className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-extrabold text-[#142B4A] mb-2">Administrator Access Required</h2>
+          <p className="text-xs text-slate-500 mb-6 max-w-md mx-auto leading-relaxed">
+            Marketplace administration, point configuration, and vendor governance controls are restricted to verified administrators. Please sign in with your administrative account.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => openAuthModal('login')}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Sign In as Admin
+            </button>
+            <button
+              onClick={() => navigateTo('home')}
+              className="w-full sm:w-auto px-4 py-2.5 text-xs text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              Back to Marketplace
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUser.role !== 'admin') {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center mx-auto mb-4">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-extrabold text-[#142B4A] mb-2">Access Restricted</h2>
+          <p className="text-xs text-slate-500 mb-6 max-w-md mx-auto leading-relaxed">
+            You are currently signed in as <strong>{currentUser.fullName}</strong> (<span className="capitalize">{currentUser.role}</span>). Super Administrator privileges are required to view and modify platform governance settings.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => navigateTo(currentUser.role === 'shopkeeper' ? 'shopkeeper_dashboard' : 'customer_dashboard')}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Go to Your Dashboard
+            </button>
+            <button
+              onClick={() => navigateTo('home')}
+              className="w-full sm:w-auto px-4 py-2.5 text-xs text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              Back to Marketplace
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -365,12 +506,106 @@ export const AdminDashboard: React.FC = () => {
               </div>
               <button
                 onClick={() => setActiveTab('shops')}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg"
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg cursor-pointer"
               >
                 Review Now
               </button>
             </div>
           )}
+
+          {/* Permanent Firebase Data Migration Panel */}
+          <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#EAF3FF] text-[#142B4A] flex items-center justify-center shrink-0">
+                  <Database className="w-5 h-5 text-[#F47B44]" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#142B4A] flex items-center gap-2">
+                    <span>Permanent Demo Data Migration (Firestore)</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
+                      refero-d897d
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Add demo customers (Moumita, Nusrat) and shopkeepers (Green Valley, Bengal Pantry, Dhaka Mart) permanently to Firestore so live records show in your Admin dashboard.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleMigrateData}
+                disabled={isMigrating}
+                className="px-4 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl flex items-center gap-2 cursor-pointer shadow-xs disabled:opacity-60 transition-colors shrink-0"
+              >
+                <UploadCloud className={`w-4 h-4 text-[#F47B44] ${isMigrating ? 'animate-bounce' : ''}`} />
+                <span>{isMigrating ? 'Writing to Firestore...' : 'Sync Demo Data to Firebase'}</span>
+              </button>
+            </div>
+
+            {/* Current Status & Safety Guarantees */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
+                <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Safety Policy</span>
+                <span className="text-emerald-700 font-semibold text-xs flex items-center gap-1 mt-0.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Real Admin Preserved
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Excludes Admin account; your authenticated profile is never overwritten or mutated.
+                </p>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
+                <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Idempotence</span>
+                <span className="text-[#142B4A] font-semibold text-xs flex items-center gap-1 mt-0.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#F47B44]" /> Duplicate-Safe
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Uses deterministic IDs (`user_customer_01`, `shop_green_valley`) to prevent duplicate records.
+                </p>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
+                <span className="text-slate-400 font-mono text-[10px] uppercase font-bold block">Live Collections</span>
+                <span className="text-slate-800 font-semibold text-xs flex items-center gap-1 mt-0.5">
+                  <Database className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Products: {dataSources.products} · Shops: {dataSources.shops}</span>
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Orders: {dataSources.orders} · Synchronized live with remote Firestore rules.
+                </p>
+              </div>
+            </div>
+
+            {/* Migration Results Banner if completed */}
+            {migrationResult && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs space-y-2">
+                <div className="flex items-center gap-2 text-emerald-900 font-bold">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Migration Run Summary ({formatDateTime(migrationResult.timestamp)}):</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1">
+                  <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                    <span className="text-slate-500 block">Users</span>
+                    <strong className="text-emerald-800">{migrationResult.usersMigrated} added</strong>
+                    <span className="text-slate-400 block text-[10px]">({migrationResult.usersSkipped} existing)</span>
+                  </div>
+                  <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                    <span className="text-slate-500 block">Shops</span>
+                    <strong className="text-emerald-800">{migrationResult.shopsMigrated} added</strong>
+                    <span className="text-slate-400 block text-[10px]">({migrationResult.shopsSkipped} existing)</span>
+                  </div>
+                  <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                    <span className="text-slate-500 block">Products</span>
+                    <strong className="text-emerald-800">{migrationResult.productsMigrated} added</strong>
+                    <span className="text-slate-400 block text-[10px]">({migrationResult.productsSkipped} existing)</span>
+                  </div>
+                  <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                    <span className="text-slate-500 block">Orders</span>
+                    <strong className="text-emerald-800">{migrationResult.ordersMigrated} added</strong>
+                    <span className="text-slate-400 block text-[10px]">({migrationResult.ordersSkipped} existing)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -545,7 +780,7 @@ export const AdminDashboard: React.FC = () => {
                   <th className="py-2.5 px-3">Role</th>
                   <th className="py-2.5 px-3">Points Balance</th>
                   <th className="py-2.5 px-3">Referral Code</th>
-                  <th className="py-2.5 px-3 text-right">Assign Role</th>
+                  <th className="py-2.5 px-3 text-right">Administrative Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -581,21 +816,139 @@ export const AdminDashboard: React.FC = () => {
                         {u.referralCode}
                       </td>
                       <td className="py-3 px-3 text-right">
-                        <select
-                          value={u.role}
-                          onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
-                          className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
-                        >
-                          <option value="customer">Customer</option>
-                          <option value="shopkeeper">Shopkeeper</option>
-                          <option value="admin">Administrator</option>
-                        </select>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdjustModalUser(u);
+                              setAdjustReason('');
+                              setAdjustDelta(100);
+                              setAdjustType('credit');
+                            }}
+                            className="px-2.5 py-1 text-[11px] font-semibold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-md transition-colors cursor-pointer"
+                            title="Perform administrative ledger balance adjustment"
+                          >
+                            Adjust Pts
+                          </button>
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                            className="px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-semibold"
+                          >
+                            <option value="customer">Customer</option>
+                            <option value="shopkeeper">Shopkeeper</option>
+                            <option value="admin">Administrator</option>
+                          </select>
+                        </div>
                       </td>
                     </tr>
                   ))}
               </tbody>
             </table>
           </div>
+
+          {/* Administrative Points Adjustment Modal */}
+          {adjustModalUser && (
+            <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+              <div className="fixed inset-0 bg-black/50 backdrop-blur-xs" onClick={() => setAdjustModalUser(null)} />
+              <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 z-10 border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div>
+                    <h3 className="text-base font-bold text-[#142B4A]">Administrative Point Adjustment</h3>
+                    <p className="text-xs text-slate-500">
+                      User: <strong className="text-slate-800">{adjustModalUser.fullName}</strong> ({adjustModalUser.email})
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setAdjustModalUser(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAdjustPointsSubmit} className="space-y-3.5 text-xs">
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <span className="text-slate-500 block mb-0.5">Current Spendable Balance</span>
+                    <strong className="font-mono text-base text-[#142B4A]">
+                      {formatPoints(adjustModalUser.pointsBalance)} pts
+                    </strong>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdjustType('credit')}
+                      className={`py-2 rounded-lg font-bold border transition-colors cursor-pointer ${
+                        adjustType === 'credit'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      + Credit Points
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustType('debit')}
+                      className={`py-2 rounded-lg font-bold border transition-colors cursor-pointer ${
+                        adjustType === 'debit'
+                          ? 'bg-red-50 border-red-500 text-red-800'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      - Debit Points
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Points Amount *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={adjustDelta}
+                      onChange={(e) => setAdjustDelta(Math.max(1, Number(e.target.value)))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono font-bold"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Mandatory Audit Reason * (Min 5 chars)
+                    </label>
+                    <input
+                      type="text"
+                      value={adjustReason}
+                      onChange={(e) => setAdjustReason(e.target.value)}
+                      placeholder="e.g. Compensation for order issue, promotional credit correction"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                      required
+                    />
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      This adjustment is strictly separated from ordinary customer gifting and will be permanently recorded in the Admin Audit Trail.
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setAdjustModalUser(null)}
+                      className="px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-semibold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isAdjusting || !adjustReason || adjustReason.trim().length < 5}
+                      className="px-4 py-2 bg-[#142B4A] hover:bg-[#1E3A5F] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isAdjusting ? 'Processing...' : 'Confirm Adjustment'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -609,7 +962,16 @@ export const AdminDashboard: React.FC = () => {
                 Inspect complete seller portfolios, verify business credentials, approve or reject with mandatory audit reasons.
               </p>
             </div>
-            <div className="text-right">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                  dataSources.shops === 'live'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}
+              >
+                {dataSources.shops === 'live' ? '● Live Firestore Data' : '○ Demo Showcase Mode'}
+              </span>
               <span className="text-[11px] font-semibold text-slate-500">
                 Pending Reviews: <strong className="text-amber-700 font-mono">{shops.filter((s) => s.status === 'pending').length}</strong>
               </span>

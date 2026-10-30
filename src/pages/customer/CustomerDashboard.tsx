@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT, formatPoints, formatDate, formatDateTime } from '../../utils/formatters';
@@ -31,6 +31,9 @@ export const CustomerDashboard: React.FC = () => {
     wishlist,
     products,
     navigateTo,
+    openAuthModal,
+    customerTab,
+    setCustomerTab,
     submitPointTransfer,
     approvePointTransfer,
     rejectPointTransfer,
@@ -40,7 +43,45 @@ export const CustomerDashboard: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<
     'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist'
-  >('overview');
+  >(customerTab || 'overview');
+
+  useEffect(() => {
+    if (customerTab) {
+      setActiveTab(customerTab);
+    }
+  }, [customerTab]);
+
+  const [processingTransfers, setProcessingTransfers] = useState<Record<string, boolean>>({});
+
+  const handleAcceptTransfer = async (reqId: string) => {
+    if (processingTransfers[reqId]) return;
+    setProcessingTransfers((prev) => ({ ...prev, [reqId]: true }));
+    try {
+      const res = await approvePointTransfer(reqId);
+      if (!res.success) {
+        showToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to accept point transfer.', 'error');
+    } finally {
+      setProcessingTransfers((prev) => ({ ...prev, [reqId]: false }));
+    }
+  };
+
+  const handleDeclineTransfer = async (reqId: string) => {
+    if (processingTransfers[reqId]) return;
+    setProcessingTransfers((prev) => ({ ...prev, [reqId]: true }));
+    try {
+      const res = await rejectPointTransfer(reqId);
+      if (!res.success) {
+        showToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to decline point transfer.', 'error');
+    } finally {
+      setProcessingTransfers((prev) => ({ ...prev, [reqId]: false }));
+    }
+  };
 
   // Transfer form
   const [transferRecipient, setTransferRecipient] = useState('');
@@ -49,7 +90,45 @@ export const CustomerDashboard: React.FC = () => {
   const [isSubmittingTransfer, setIsSubmittingTransfer] = useState(false);
   const [copiedReferral, setCopiedReferral] = useState(false);
 
-  if (!currentUser) return null;
+  if (!currentUser) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 shadow-sm space-y-6">
+          <div className="w-16 h-16 bg-[#142B4A]/10 text-[#142B4A] rounded-2xl flex items-center justify-center mx-auto">
+            <User className="w-8 h-8 text-[#F47B44]" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl sm:text-2xl font-extrabold text-[#142B4A]">
+              Customer Account Required
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+              Please sign in to view your personal REFERO Points balance, track orders, share your referral code, and accept point transfers.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <button
+              onClick={() => openAuthModal('login')}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-sm"
+            >
+              Sign In to Your Account
+            </button>
+            <button
+              onClick={() => openAuthModal('register')}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#F47B44] hover:bg-[#e06830] text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-sm"
+            >
+              Create Free Account
+            </button>
+            <button
+              onClick={() => navigateTo('home')}
+              className="w-full sm:w-auto px-4 py-2.5 text-xs text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              Back to Shopping
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Filtered customer-specific datasets
   const myOrders = orders.filter((o) => o.customerId === currentUser.id);
@@ -72,6 +151,10 @@ export const CustomerDashboard: React.FC = () => {
     e.preventDefault();
     if (!transferRecipient || transferAmount <= 0) {
       showToast('Please provide a valid recipient email and points amount.', 'error');
+      return;
+    }
+    if (currentUser.pointsBalance <= 0 || currentUser.pointsBalance < transferAmount) {
+      showToast('Insufficient points balance.', 'error');
       return;
     }
     setIsSubmittingTransfer(true);
@@ -521,12 +604,18 @@ export const CustomerDashboard: React.FC = () => {
                 <strong>Transfer Security:</strong> When you submit, a pending request is generated. The recipient must accept the transfer for points to be authoritatively debited and credited.
               </div>
 
+              {currentUser.pointsBalance <= 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
+                  <span className="font-semibold">Insufficient points balance:</span> You currently have 0 spendable REFERO Points. You must earn or hold points to transfer to another user.
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={isSubmittingTransfer || currentUser.pointsBalance < transferAmount}
-                className="w-full py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                disabled={isSubmittingTransfer || currentUser.pointsBalance <= 0 || currentUser.pointsBalance < transferAmount}
+                className="w-full py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmittingTransfer ? 'Sending Request...' : 'Submit Transfer Request'}
+                <span>{isSubmittingTransfer ? 'Sending Request...' : 'Submit Transfer Request'}</span>
               </button>
             </form>
           </div>
@@ -557,20 +646,39 @@ export const CustomerDashboard: React.FC = () => {
                       {req.status === 'pending' ? (
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => approvePointTransfer(req.id)}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold cursor-pointer"
+                            type="button"
+                            onClick={() => handleAcceptTransfer(req.id)}
+                            disabled={Boolean(processingTransfers[req.id])}
+                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5"
                           >
-                            Accept
+                            {processingTransfers[req.id] ? (
+                              <span className="flex items-center gap-1.5">
+                                <span className="w-2.5 h-2.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+                                <span>Processing...</span>
+                              </span>
+                            ) : (
+                              <span>Accept</span>
+                            )}
                           </button>
                           <button
-                            onClick={() => rejectPointTransfer(req.id)}
-                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-semibold cursor-pointer"
+                            type="button"
+                            onClick={() => handleDeclineTransfer(req.id)}
+                            disabled={Boolean(processingTransfers[req.id])}
+                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
                           >
-                            Decline
+                            <span>Decline</span>
                           </button>
                         </div>
                       ) : (
-                        <span className="px-2 py-0.5 uppercase text-[10px] font-bold rounded bg-slate-100 text-slate-600">
+                        <span
+                          className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded ${
+                            req.status === 'accepted' || req.status === 'approved'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : req.status === 'rejected'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
                           {req.status}
                         </span>
                       )}

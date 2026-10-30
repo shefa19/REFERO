@@ -13,6 +13,7 @@ export interface UserProfile {
   avatarUrl?: string;
   status: 'active' | 'suspended';
   shopId?: string;
+  wishlist?: string[];
   createdAt: string;
 }
 
@@ -172,7 +173,7 @@ export interface PointTransferRequest {
   recipientName: string;
   points: number;
   note?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status: 'pending' | 'approved' | 'accepted' | 'rejected' | 'cancelled';
   createdAt: string;
   processedAt?: string;
 }
@@ -219,6 +220,7 @@ export interface NotificationItem {
   type: 'order' | 'points' | 'transfer' | 'system';
   read: boolean;
   link?: string;
+  metadata?: Record<string, any>;
   createdAt: string;
 }
 

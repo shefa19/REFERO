@@ -265,6 +265,18 @@ export const ProductDetailModal: React.FC = () => {
               {/* Action Buttons */}
               <div className="flex items-center gap-3 pt-2">
                 <button
+                  onClick={() => toggleWishlist(product.id)}
+                  className={`p-3 border rounded-xl transition-all cursor-pointer shadow-xs flex items-center justify-center shrink-0 ${
+                    isWishlisted
+                      ? 'border-red-200 bg-red-50 text-red-600'
+                      : 'border-slate-200 bg-white text-slate-600 hover:text-red-500 hover:border-red-200'
+                  }`}
+                  title={isWishlisted ? 'Remove from Wishlist' : 'Save to Wishlist'}
+                  aria-label={isWishlisted ? 'Remove from Wishlist' : 'Save to Wishlist'}
+                >
+                  <Heart className={`w-4 h-4 ${isWishlisted ? 'fill-red-500 text-red-500' : ''}`} />
+                </button>
+                <button
                   onClick={handleAddToCart}
                   disabled={product.stock === 0}
                   className="flex-1 py-3 px-4 bg-[#142B4A] hover:bg-[#1E3A5F] active:scale-98 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-40"

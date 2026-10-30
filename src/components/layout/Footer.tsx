@@ -4,7 +4,7 @@ import { useStore } from '../../context/StoreContext';
 import { ShieldCheck, Truck, RotateCcw, Award } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { navigateTo, setFilter, openFirebaseModal } = useStore();
+  const { navigateTo, setFilter } = useStore();
 
   return (
     <footer className="bg-[#142B4A] text-white pt-14 pb-8 border-t border-slate-800">
@@ -55,19 +55,19 @@ export const Footer: React.FC = () => {
 
       {/* Main Footer Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
-          {/* Brand Column */}
-          <div className="md:col-span-2 space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-10">
+          {/* Column 1: Brand & Bio */}
+          <div className="space-y-4">
             <ReferoLogo variant="full" theme="dark" size="lg" />
-            <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
+            <p className="text-xs text-slate-300 leading-relaxed">
               REFERO is Bangladesh's premier community-driven multi-vendor marketplace.
               Empowering local farmers, artisanal producers, and household retailers while rewarding
               every customer through loyalty points and referral bonuses.
             </p>
-            <div className="flex items-center gap-3 pt-2">
-              <span className="text-xs text-slate-400 font-medium">Supported Payment Options:</span>
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-                <span className="px-2 py-0.5 bg-white/10 rounded">COD</span>
+            <div className="space-y-1.5 pt-2">
+              <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block">Supported Payment Options</span>
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px] font-semibold text-slate-200">
+                <span className="px-2 py-0.5 bg-white/10 rounded">Cash on Delivery</span>
                 <span className="px-2 py-0.5 bg-[#d82a65]/80 text-white rounded">bKash</span>
                 <span className="px-2 py-0.5 bg-[#f6921e]/80 text-white rounded">Nagad</span>
                 <span className="px-2 py-0.5 bg-[#8b1874]/80 text-white rounded">Rocket</span>
@@ -75,9 +75,9 @@ export const Footer: React.FC = () => {
             </div>
           </div>
 
-          {/* Column 2: Marketplace */}
+          {/* Column 2: Marketplace Categories */}
           <div className="space-y-3">
-            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Marketplace</h5>
+            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Explore Marketplace</h5>
             <ul className="space-y-2 text-xs text-slate-300">
               <li>
                 <button
@@ -115,20 +115,23 @@ export const Footer: React.FC = () => {
               <li>
                 <button
                   onClick={() => {
-                    setFilter({ redeemWithPointsOnly: true });
+                    setFilter({ category: 'Household & Personal Care' });
                     navigateTo('products');
                   }}
                   className="hover:text-white transition-colors cursor-pointer"
                 >
-                  Redeem with Points
+                  Household & Personal Care
                 </button>
               </li>
               <li>
                 <button
-                  onClick={() => navigateTo('shop_profile', { shopId: 'shop_green_valley' })}
-                  className="hover:text-white transition-colors cursor-pointer"
+                  onClick={() => {
+                    setFilter({ redeemWithPointsOnly: true });
+                    navigateTo('products');
+                  }}
+                  className="hover:text-white transition-colors cursor-pointer text-[#F47B44] font-medium"
                 >
-                  Green Valley Organics
+                  Redeem with REFERO Points
                 </button>
               </li>
             </ul>
@@ -136,7 +139,7 @@ export const Footer: React.FC = () => {
 
           {/* Column 3: Customer Care & Policies */}
           <div className="space-y-3">
-            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Policies & Help</h5>
+            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Customer Care & Policies</h5>
             <ul className="space-y-2 text-xs text-slate-300">
               <li>
                 <button
@@ -151,7 +154,7 @@ export const Footer: React.FC = () => {
                   onClick={() => navigateTo('policy_shipping')}
                   className="hover:text-white transition-colors cursor-pointer"
                 >
-                  Shipping & Delivery
+                  Shipping & Delivery Info
                 </button>
               </li>
               <li>
@@ -159,7 +162,7 @@ export const Footer: React.FC = () => {
                   onClick={() => navigateTo('policy_returns')}
                   className="hover:text-white transition-colors cursor-pointer"
                 >
-                  Returns & Refunds
+                  7-Day Returns & Refunds
                 </button>
               </li>
               <li>
@@ -181,43 +184,25 @@ export const Footer: React.FC = () => {
             </ul>
           </div>
 
-          {/* Column 4: Platform Portals */}
+          {/* Column 4: Contact & Hotline */}
           <div className="space-y-3">
-            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Portals & Config</h5>
-            <ul className="space-y-2 text-xs text-slate-300">
-              <li>
-                <button
-                  onClick={() => navigateTo('customer_dashboard')}
-                  className="hover:text-white transition-colors cursor-pointer"
-                >
-                  Customer Account & Points
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => navigateTo('shopkeeper_dashboard')}
-                  className="hover:text-white transition-colors cursor-pointer"
-                >
-                  Shopkeeper Portal
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => navigateTo('admin_dashboard')}
-                  className="hover:text-white transition-colors cursor-pointer"
-                >
-                  Admin Console
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={openFirebaseModal}
-                  className="text-[#F47B44] hover:text-white transition-colors cursor-pointer font-medium"
-                >
-                  Firebase Connection Guide
-                </button>
-              </li>
-            </ul>
+            <h5 className="text-xs font-bold tracking-wider uppercase text-slate-200">Support & Assistance</h5>
+            <div className="space-y-3 text-xs text-slate-300">
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10 space-y-1">
+                <span className="text-[11px] text-slate-400 block">Customer Service Hotline</span>
+                <p className="text-sm font-bold font-mono text-[#F47B44]">+880 1717 026630</p>
+                <span className="text-[10px] text-slate-400 block">9:00 AM – 10:00 PM (Daily)</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-slate-300">
+                Email inquiries:{' '}
+                <a href="mailto:support@refero.com.bd" className="text-white hover:underline font-semibold">
+                  support@refero.com.bd
+                </a>
+              </p>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Dhaka Hub: Plot 42, Block D, Bashundhara R/A, Dhaka, Bangladesh.
+              </p>
+            </div>
           </div>
         </div>
       </div>

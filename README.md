@@ -1,35 +1,20 @@
-# REFERO
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-A multi-vendor Ecommerce marketplace with customer, shopkeeper, and
-admin dashboards, and a product points and rewards system.
+# Run and deploy your AI Studio app
 
-**University Project**
+This contains everything you need to run your app locally.
 
-## Live Demo
+View your app in AI Studio: https://ai.studio/apps/0fe2daab-6bed-42d7-ad52-7517a18d6833
 
-🌐 https://refero-d897d.web.app
+## Run Locally
 
-## Team Members
+**Prerequisites:**  Node.js
 
-- Shefa19 (Team Lead)
-- Moumita Pramanik
-- Mahinur Islam
 
-## Tech Stack
-
-- React + Vite + TypeScript
-- Firebase (Authentication, Firestore, Hosting)
-- Tailwind CSS
-
-## Features
-
-- Multi-role authentication (Customer / Shopkeeper / Admin)
-- Product management and catalog
-- Shopping cart and checkout
-- Order tracking
-- REFERO Points and rewards system
-- Referral system
-
-## Repository
-
-https://github.com/shefa19/REFERO
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

@@ -38,6 +38,8 @@ export const ShopkeeperDashboard: React.FC = () => {
     updateOrderItemStatus,
     updateShopPolicies,
     showToast,
+    openAuthModal,
+    openSellerModal,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'orders' | 'settings'>('overview');
@@ -45,7 +47,37 @@ export const ShopkeeperDashboard: React.FC = () => {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
 
   // Active shopkeeper's shop
-  const myShop = shops.find((s) => s.ownerId === currentUser?.id) || shops[0];
+  const fallbackShop = {
+    id: 'shop_demo_01',
+    name: 'Bengal Pure Agro & Grocery',
+    slug: 'bengal-pure-agro',
+    category: 'Groceries & Organics',
+    status: 'approved' as const,
+    ownerId: currentUser?.id || 'usr_seller_01',
+    ownerName: currentUser?.fullName || 'Kabir Ahmed',
+    ownerEmail: currentUser?.email || 'kabir@bengalpure.com.bd',
+    address: 'Plot 42, Block C, Uttara Sector 11, Dhaka',
+    phone: '+880 1711 000000',
+    description: 'Specializing in authentic mustard oils, pure honeys, tea, and aromatic rice directly from Bogura and Sylhet.',
+    logo: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=200&q=80',
+    banner: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=1200&q=80',
+    rating: 4.9,
+    reviewCount: 328,
+    totalSales: 142000,
+    commissionRate: 8,
+    deliveryPolicy: 'Same-day delivery inside Dhaka North.',
+    returnPolicy: '7-day unconditional replacement for damaged seals.',
+    cancellationPolicy: 'Orders may be cancelled prior to dispatch without fee.',
+    customerSupportPhone: '+880 1711 000000',
+    customerSupportEmail: 'kabir@bengalpure.com.bd',
+    customerSupportHours: 'Sunday - Thursday: 9:00 AM - 8:00 PM',
+    tradeLicenseNumber: 'TRAD/DNCC/082194/2023',
+    taxIdNumber: 'TIN-4829103948',
+    emailNotificationEnabled: true,
+    orderSmsNotificationEnabled: true,
+    createdAt: '2025-01-15T00:00:00Z',
+  };
+  const myShop = shops.find((s) => s.ownerId === currentUser?.id) || shops[0] || fallbackShop;
   const myProducts = products.filter((p) => p.shopId === myShop.id);
 
   // Policy & Profile Settings State
@@ -242,6 +274,72 @@ export const ShopkeeperDashboard: React.FC = () => {
     }
     setIsAddModalOpen(false);
   };
+
+  if (!currentUser) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+          <div className="w-16 h-16 rounded-2xl bg-[#142B4A] text-[#F47B44] flex items-center justify-center mx-auto mb-4">
+            <Store className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-extrabold text-[#142B4A] mb-2">Merchant Sign In Required</h2>
+          <p className="text-xs text-slate-500 mb-6 max-w-md mx-auto leading-relaxed">
+            Please log in to manage your storefront, products, orders, and customer fulfillment policies.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => openAuthModal('login')}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Sign In to Merchant Account
+            </button>
+            <button
+              onClick={() => openSellerModal()}
+              className="w-full sm:w-auto px-5 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+            >
+              Apply as a Merchant
+            </button>
+            <button
+              onClick={() => navigateTo('home')}
+              className="w-full sm:w-auto px-4 py-2.5 text-xs text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              Back to Shopping
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUser.role === 'customer') {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+          <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center mx-auto mb-4">
+            <Store className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-extrabold text-[#142B4A] mb-2">Merchant Account Required</h2>
+          <p className="text-xs text-slate-500 mb-6 max-w-md mx-auto leading-relaxed">
+            You are currently signed in as a customer account (<strong>{currentUser.email}</strong>). To manage an active vendor store on REFERO, submit a merchant application or switch to a seller account.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => openSellerModal()}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+            >
+              Apply to Sell on REFERO
+            </button>
+            <button
+              onClick={() => navigateTo('customer_dashboard')}
+              className="w-full sm:w-auto px-5 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+            >
+              Customer Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">

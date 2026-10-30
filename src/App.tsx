@@ -16,6 +16,7 @@ import { OrderTrackingPage } from './pages/OrderTrackingPage';
 import { CustomerDashboard } from './pages/customer/CustomerDashboard';
 import { ShopkeeperDashboard } from './pages/shopkeeper/ShopkeeperDashboard';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { WishlistPage } from './pages/WishlistPage';
 import { PolicyPages } from './pages/PolicyPages';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
@@ -40,6 +41,8 @@ const MainAppContent: React.FC = () => {
         return <ShopkeeperDashboard />;
       case 'admin_dashboard':
         return <AdminDashboard />;
+      case 'wishlist':
+        return <WishlistPage />;
       case 'policy_points':
       case 'policy_shipping':
       case 'policy_returns':
@@ -70,7 +73,10 @@ const MainAppContent: React.FC = () => {
 
       {/* Global Toast Notification */}
       {toast && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 bg-[#142B4A] text-white rounded-xl shadow-2xl text-xs border border-white/10 animate-fade-in max-w-sm">
+        <div
+          key={`${toast.type}_${toast.message}`}
+          className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 bg-[#142B4A] text-white rounded-xl shadow-2xl text-xs border border-white/10 animate-fade-in max-w-sm pointer-events-none"
+        >
           {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
           {toast.type === 'error' && <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />}
           {toast.type === 'info' && <Info className="w-4 h-4 text-[#F47B44] shrink-0" />}
