@@ -2,24 +2,36 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { ReferoLogo } from '../common/ReferoLogo';
-import { X, Store, Phone, MapPin, Truck, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, Store, Phone, MapPin, Truck, RotateCcw, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
 
 export const SellerApplicationModal: React.FC = () => {
   const { currentUser } = useAuth();
-  const { isSellerModalOpen, closeSellerModal, applyForSellerShop, openAuthModal, showToast } = useStore();
+  const {
+    isSellerModalOpen,
+    closeSellerModal,
+    applyForSellerShop,
+    openAuthModal,
+    showToast,
+    shops,
+    navigateTo,
+  } = useStore();
 
-  const [form, setForm] = useState({
-    name: '',
-    category: 'Groceries & Organics',
+  const existingShop = currentUser
+    ? shops.find((s) => s.ownerId === currentUser.id || (currentUser.shopId && s.id === currentUser.shopId))
+    : null;
+
+  const [form, setForm] = useState(() => ({
+    name: existingShop?.name || '',
+    category: existingShop?.category || 'Groceries & Organics',
     contactPerson: currentUser?.fullName || '',
     businessEmail: currentUser?.email || '',
     phone: currentUser?.phone || '',
-    address: '',
+    address: existingShop?.address || '',
     tradeLicenseNumber: '',
-    description: '',
-    deliveryPolicy: 'Standard 2-4 business days courier delivery across Bangladesh.',
-    returnPolicy: '7-day replacement or refund for damaged, broken, or expired items.',
-  });
+    description: existingShop?.description || '',
+    deliveryPolicy: existingShop?.deliveryPolicy || 'Standard 2-4 business days courier delivery across Bangladesh.',
+    returnPolicy: existingShop?.returnPolicy || '7-day replacement or refund for damaged, broken, or expired items.',
+  }));
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -69,22 +81,85 @@ export const SellerApplicationModal: React.FC = () => {
           <X className="w-5 h-5" />
         </button>
 
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-[#142B4A] mx-auto mb-3 border border-amber-200">
-            <Store className="w-6 h-6 text-[#F47B44]" />
+        {existingShop?.status === 'approved' || currentUser?.role === 'shopkeeper' ? (
+          <div className="text-center py-6 space-y-4">
+            <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 mx-auto border border-emerald-200">
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+            </div>
+            <h2 className="text-lg font-extrabold text-[#142B4A]">You are an Approved Seller!</h2>
+            <p className="text-xs text-slate-600 max-w-sm mx-auto">
+              Your storefront "{existingShop?.name || 'Your Store'}" is approved and active. You have full access to manage inventory, products, orders, and policies.
+            </p>
+            <div className="pt-2 flex justify-center gap-3">
+              <button
+                onClick={() => {
+                  closeSellerModal();
+                  navigateTo('shopkeeper_dashboard');
+                }}
+                className="px-5 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Go to Shopkeeper Portal &rarr;
+              </button>
+            </div>
           </div>
-          <h2 className="text-lg font-extrabold text-[#142B4A]">Become a Verified REFERO Seller</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Apply to launch your storefront on REFERO. Applications are reviewed by marketplace administrators.
-          </p>
-        </div>
+        ) : existingShop?.status === 'pending' ? (
+          <div className="text-center py-6 space-y-4">
+            <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600 mx-auto border border-amber-200">
+              <Clock className="w-8 h-8 text-amber-600 animate-pulse" />
+            </div>
+            <h2 className="text-lg font-extrabold text-amber-900">Application Pending Review</h2>
+            <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
+              Your storefront application for <strong className="text-slate-900 font-bold">"{existingShop.name}"</strong> has been received and is currently under review by our administration team.
+            </p>
+            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-800 text-left max-w-sm mx-auto space-y-1">
+              <p>· Category: <strong className="font-semibold">{existingShop.category}</strong></p>
+              <p>· Status: <strong className="font-semibold uppercase tracking-wider text-amber-700">Under Review</strong></p>
+              <p>· Notification: You will receive an alert as soon as your shop is reviewed.</p>
+            </div>
+            <div className="pt-2">
+              <button
+                onClick={closeSellerModal}
+                className="px-6 py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Got It
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="text-center mb-6">
+              <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-[#142B4A] mx-auto mb-3 border border-amber-200">
+                <Store className="w-6 h-6 text-[#F47B44]" />
+              </div>
+              <h2 className="text-lg font-extrabold text-[#142B4A]">
+                {existingShop?.status === 'rejected' ? 'Re-Apply as a REFERO Seller' : 'Become a Verified REFERO Seller'}
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                Apply to launch your storefront on REFERO. Applications are reviewed by marketplace administrators.
+              </p>
+            </div>
 
-        {errorMsg && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
+            {existingShop?.status === 'rejected' && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-lg">
+                <p className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Previous Application Note:</span>
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed">
+                  {existingShop.rejectionReason || 'Requirements not fulfilled.'}
+                </p>
+                <p className="mt-1 text-[10px] text-rose-600">
+                  Please update your trade details below and submit for re-evaluation.
+                </p>
+              </div>
+            )}
+
+            {errorMsg && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
 
         <form onSubmit={handleSubmit} className="space-y-3.5 text-xs">
           <div>
@@ -218,6 +293,8 @@ export const SellerApplicationModal: React.FC = () => {
             </button>
           </div>
         </form>
+          </>
+        )}
       </div>
     </div>
   );

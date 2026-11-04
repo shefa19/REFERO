@@ -512,7 +512,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (adminPreviewPersona) {
       setAdminPreviewPersona({ ...adminPreviewPersona, ...updates });
     } else if (realUser) {
-      setRealUser({ ...realUser, ...updates });
+      const updated = { ...realUser, ...updates };
+      setRealUser(updated);
+      try {
+        localStorage.setItem(`refero_user_${realUser.id}`, JSON.stringify(updated));
+      } catch {}
     }
   };
 

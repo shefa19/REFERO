@@ -9,6 +9,7 @@ import {
   PointsConfig,
   AuditLog,
   NotificationItem,
+  ProductReview,
 } from '../types';
 
 import heroMarketplaceImg from '../assets/images/hero_marketplace_lifestyle_1791967745637.jpg';
@@ -590,4 +591,50 @@ export const DEMO_NOTIFICATIONS: NotificationItem[] = [
     createdAt: '2026-02-27T09:30:00Z',
   },
 ];
+
+export const DEMO_REVIEWS: ProductReview[] = [
+  {
+    id: 'rev_01',
+    productId: 'prod_ghee_01',
+    productTitle: 'Pure Deshi Cow Ghee (Bilona Churned)',
+    shopId: 'shop_green_valley',
+    orderId: 'ord_demo_01',
+    customerId: 'user_customer_01',
+    customerName: 'Moumita Pramanik',
+    customerEmail: 'moumita.ahmed@gmail.com',
+    rating: 5,
+    comment: 'Outstanding aroma and genuine taste. The packaging was immaculate with cold seal protection. Earned 45 points right away!',
+    status: 'published',
+    createdAt: '2026-02-18T19:00:00Z',
+  },
+  {
+    id: 'rev_02',
+    productId: 'prod_mustard_01',
+    productTitle: 'Wood Cold-Pressed Ghani Mustard Oil',
+    shopId: 'shop_green_valley',
+    orderId: 'ord_demo_01',
+    customerId: 'user_customer_01',
+    customerName: 'Moumita Pramanik',
+    customerEmail: 'moumita.ahmed@gmail.com',
+    rating: 5,
+    comment: 'Pungent, authentic flavor perfect for traditional Bengali bhartas and cooking. Very satisfied with the quick delivery.',
+    status: 'published',
+    createdAt: '2026-02-18T19:30:00Z',
+  },
+  {
+    id: 'rev_03',
+    productId: 'prod_tea_01',
+    productTitle: 'Sreemangal First Flush CTC Black Tea',
+    shopId: 'shop_green_valley',
+    orderId: 'ord_demo_02',
+    customerId: 'user_customer_02',
+    customerName: 'Nusrat Jahan',
+    customerEmail: 'nusrat.jahan@gmail.com',
+    rating: 4,
+    comment: 'Rich golden liquor with a strong, malty finish. Perfect morning tea with milk and cardamom.',
+    status: 'published',
+    createdAt: '2026-02-20T10:15:00Z',
+  },
+];
+
 

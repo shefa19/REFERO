@@ -14,6 +14,7 @@ import {
   PaymentMethod,
   UserRole,
   NotificationItem,
+  ProductReview,
 } from '../types';
 import {
   DEMO_USERS,
@@ -26,12 +27,12 @@ import {
   INITIAL_POINTS_CONFIG,
   DEMO_AUDIT_LOGS,
   DEMO_NOTIFICATIONS,
+  DEMO_REVIEWS,
 } from '../data/seedData';
 import { calculateEarnedPoints, pointsToBdt } from '../utils/formatters';
 import { cleanUndefinedFields } from '../utils/cleaners';
 import { resolveProductImage } from '../utils/imageAssets';
 import { db, isFirebaseConfigured } from '../services/firebase/config';
-import { callAcceptPointTransfer, callDeclinePointTransfer } from '../services/firebase/functionsClient';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, limit, runTransaction } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 
@@ -103,6 +104,7 @@ interface StoreContextType {
   pointsConfig: PointsConfig;
   auditLogs: AuditLog[];
   notifications: NotificationItem[];
+  reviews: ProductReview[];
   filters: ProductFilterState;
   customerTab: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist';
   setCustomerTab: (tab: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist') => void;
@@ -147,6 +149,7 @@ interface StoreContextType {
     pointsToUse: number;
     paymentReference?: string;
   }) => Promise<Order>;
+  confirmOrderReceived: (orderId: string) => Promise<{ success: boolean; message: string }>;
 
   // Customer Point Transfers
   submitPointTransfer: (recipientEmail: string, points: number, note?: string) => Promise<{ success: boolean; message: string }>;
@@ -188,6 +191,25 @@ interface StoreContextType {
     targetUserId: string,
     deltaPoints: number,
     reason: string
+  ) => Promise<{ success: boolean; message: string }>;
+
+  // Product Reviews & Ratings (Verified Purchases)
+  checkReviewEligibility: (productId: string) => { isEligible: boolean; qualifyingOrderId?: string; reason?: string };
+  submitProductReview: (reviewData: {
+    productId: string;
+    rating: number;
+    comment: string;
+    images?: string[];
+  }) => Promise<{ success: boolean; message: string }>;
+  updateProductReview: (
+    reviewId: string,
+    updates: { rating: number; comment: string; images?: string[] }
+  ) => Promise<{ success: boolean; message: string }>;
+  deleteProductReview: (reviewId: string) => Promise<{ success: boolean; message: string }>;
+  moderateProductReview: (
+    reviewId: string,
+    action: 'published' | 'hidden' | 'flagged',
+    reason?: string
   ) => Promise<{ success: boolean; message: string }>;
 
   // Notifications
@@ -249,6 +271,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [pointsConfig, setPointsConfig] = useState<PointsConfig>(INITIAL_POINTS_CONFIG);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(DEMO_AUDIT_LOGS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(DEMO_NOTIFICATIONS);
+  const [reviews, setReviews] = useState<ProductReview[]>(() => isFirebaseConfigured() ? [] : DEMO_REVIEWS);
   const [filters, setFilters] = useState<ProductFilterState>(defaultFilterState);
   const [customerTab, setCustomerTab] = useState<
     'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist'
@@ -324,6 +347,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   // Ignore private shop fetch error
                 }
               }
+
+              // Also check if current user owns a shop by ownerId query
+              if (currentUser && !loadedShops.some((s) => s.ownerId === currentUser.id)) {
+                try {
+                  const ownerShopQuery = query(
+                    collection(activeDb, 'shops'),
+                    where('ownerId', '==', currentUser.id),
+                    limit(1)
+                  );
+                  const ownerSnap = await getDocs(ownerShopQuery);
+                  if (!ownerSnap.empty) {
+                    const ownedShop = { id: ownerSnap.docs[0].id, ...ownerSnap.docs[0].data() } as Shop;
+                    loadedShops.push(ownedShop);
+                    if (!currentUser.shopId) {
+                      updateCurrentUserProfile({ shopId: ownedShop.id });
+                    }
+                  }
+                } catch {
+                  // Ignore non-indexed owner query error
+                }
+              }
+
+              // Auto-synchronize role if user owns an approved shop
+              const myApproved = loadedShops.find((s) => s.ownerId === currentUser?.id && s.status === 'approved');
+              if (myApproved && currentUser && currentUser.role !== 'shopkeeper' && currentUser.role !== 'admin') {
+                updateCurrentUserProfile({ role: 'shopkeeper', shopId: myApproved.id });
+              }
+
               setShops(loadedShops);
               setDataSources((prev) => ({ ...prev, shops: 'live' }));
             } else {
@@ -366,6 +417,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           } catch (orderErr) {
             console.warn('Firestore orders fetch note:', orderErr);
           }
+        }
+
+        // 4. Load reviews from Firestore
+        try {
+          const revQuery = currentUser?.role === 'admin'
+            ? collection(activeDb, 'reviews')
+            : query(collection(activeDb, 'reviews'), where('status', '==', 'published'));
+          const revSnap = await getDocs(revQuery);
+          if (isMounted) {
+            if (revSnap.docs.length > 0) {
+              const loadedReviews = revSnap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+              })) as ProductReview[];
+              setReviews(loadedReviews);
+            } else {
+              setReviews([]);
+            }
+          }
+        } catch (revErr) {
+          console.warn('Firestore reviews fetch note:', revErr);
         }
       } catch (err) {
         console.warn('Firestore initial data fetch note:', err);
@@ -881,12 +953,99 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       paymentReference: orderData.paymentReference,
       orderStatus: 'placed',
       pointsEarned,
-      pointsCredited: false, // will be credited upon delivery
+      pointsCredited: false, // will be credited upon customer confirmation
       referralRewardCredited: false,
+      productIds: orderItems.map((it) => it.productId),
+      shopIds: Array.from(new Set(orderItems.map((it) => it.shopId))),
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Atomically deduct stock from inventory
+    // 1. Authoritative Validation and Atomic Transaction
+    const activeDb = db;
+    let finalUserBalance = currentUser.pointsBalance;
+
+    if (!isAdminPreviewActive && isFirebaseConfigured() && activeDb) {
+      try {
+        const orderRef = doc(activeDb, 'orders', newOrder.id);
+        const userRef = doc(activeDb, 'users', currentUser.id);
+        const txRef = doc(collection(activeDb, 'pointTransactions'));
+        const nowIso = new Date().toISOString();
+
+        await runTransaction(activeDb, async (transaction) => {
+          // A. Verify customer points balance inside transaction
+          let serverBal = 0;
+          if (orderData.pointsToUse > 0) {
+            const userSnap = await transaction.get(userRef);
+            if (!userSnap.exists()) {
+              throw new Error('Customer account not found on server.');
+            }
+            const uData = userSnap.data();
+            serverBal = typeof uData.pointsBalance === 'number' ? uData.pointsBalance : 0;
+            if (serverBal < orderData.pointsToUse) {
+              throw new Error(`Insufficient points balance: you have ${serverBal} pts available, but requested ${orderData.pointsToUse} pts.`);
+            }
+          }
+
+          // B. Verify stock for each cart product inside transaction
+          for (const item of cart) {
+            const prodRef = doc(activeDb, 'products', item.product.id);
+            const prodSnap = await transaction.get(prodRef);
+            if (prodSnap.exists()) {
+              const pData = prodSnap.data();
+              const serverStock = typeof pData.stock === 'number' ? pData.stock : 0;
+              if (serverStock < item.quantity) {
+                throw new Error(`Insufficient inventory: "${item.product.title}" has only ${serverStock} units available.`);
+              }
+              transaction.update(prodRef, {
+                stock: serverStock - item.quantity,
+                updatedAt: nowIso,
+              });
+            }
+          }
+
+          // C. If points were used for discount, update balance & ledger atomically
+          if (orderData.pointsToUse > 0) {
+            finalUserBalance = serverBal - orderData.pointsToUse;
+            transaction.update(userRef, {
+              pointsBalance: finalUserBalance,
+              points: finalUserBalance,
+              lastOrderRedemptionId: newOrder.id,
+              updatedAt: nowIso,
+            });
+
+            transaction.set(txRef, {
+              id: txRef.id,
+              userId: currentUser.id,
+              type: 'checkout_discount',
+              points: -orderData.pointsToUse,
+              relatedId: newOrder.id,
+              description: `Applied ${orderData.pointsToUse} pts for ${pointsToBdt(orderData.pointsToUse, pointsConfig.pointsToBdtRate)} discount on order #${newOrder.orderNumber}`,
+              ruleSnapshot: `Conversion rate: 1 pt = ৳${pointsConfig.pointsToBdtRate}`,
+              status: 'completed',
+              createdAt: nowIso,
+            });
+          }
+
+          // D. Create order document atomically
+          transaction.set(orderRef, cleanUndefinedFields(newOrder));
+        });
+      } catch (err: any) {
+        console.error('Checkout atomic transaction error:', err);
+        showToast(err.message || 'Checkout failed. Please review your cart and points balance.', 'error');
+        throw err;
+      }
+    } else {
+      // Offline / Preview Mode validation
+      if (orderData.pointsToUse > 0) {
+        if (currentUser.pointsBalance < orderData.pointsToUse) {
+          showToast(`Insufficient points balance: you have ${currentUser.pointsBalance} pts available.`, 'error');
+          throw new Error('Insufficient points balance.');
+        }
+        finalUserBalance = currentUser.pointsBalance - orderData.pointsToUse;
+      }
+    }
+
+    // 2. State updates ONLY executed after authoritative transaction succeeds
     setProducts((prev) =>
       prev.map((p) => {
         const cartItem = cart.find((ci) => ci.product.id === p.id);
@@ -897,10 +1056,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       })
     );
 
-    // 2. If points were used for checkout discount, deduct from balance and add immutable ledger entry
     if (orderData.pointsToUse > 0) {
       updateCurrentUserProfile({
-        pointsBalance: Math.max(0, currentUser.pointsBalance - orderData.pointsToUse),
+        pointsBalance: finalUserBalance,
       });
 
       const discountTx: PointTransaction = {
@@ -917,15 +1075,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setPointTransactions((prev) => [discountTx, ...prev]);
     }
 
-    // 3. Clear cart and add order to database
     setOrders((prev) => [newOrder, ...prev]);
-    if (!isAdminPreviewActive && isFirebaseConfigured() && db) {
-      try {
-        await setDoc(doc(db, 'orders', newOrder.id), cleanUndefinedFields(newOrder));
-      } catch (err) {
-        console.warn('Firestore createOrder persistence note:', err);
-      }
-    }
     clearCart();
     setSelectedOrderId(newOrder.id);
     if (isAdminPreviewActive) {
@@ -958,20 +1108,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const activeDb = db;
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
       try {
-        // Look up recipient user account by registered email
-        const usersRef = collection(activeDb, 'users');
-        const recipientQuery = query(usersRef, where('email', '==', cleanEmail), limit(1));
-        const recipientSnap = await getDocs(recipientQuery);
+        // Look up recipient user account by registered email (handled safely under privacy rules)
+        let recipientId = '';
+        let recipientData: any = {};
+        try {
+          const usersRef = collection(activeDb, 'users');
+          const recipientQuery = query(usersRef, where('email', '==', cleanEmail), limit(1));
+          const recipientSnap = await getDocs(recipientQuery);
 
-        if (recipientSnap.empty) {
-          return { success: false, message: `Recipient with email ${recipientEmail} was not found.` };
+          if (!recipientSnap.empty) {
+            const recipientDoc = recipientSnap.docs[0];
+            recipientId = recipientDoc.id;
+            recipientData = recipientDoc.data();
+          }
+        } catch {
+          // Privacy policy: other users cannot be queried; request routes securely via recipientEmail
         }
 
-        const recipientDoc = recipientSnap.docs[0];
-        const recipientId = recipientDoc.id;
-        const recipientData = recipientDoc.data();
-
-        if (recipientId === currentUser.id) {
+        if (recipientId && recipientId === currentUser.id) {
           return { success: false, message: 'Self-transfers are not permitted.' };
         }
 
@@ -1151,189 +1305,127 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { success: false, message: `This transfer request has already been ${request.status}.` };
     }
 
+    const pointsAmount = request.points;
     const activeDb = db;
+
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
-      let functionSucceeded = false;
-
-      // 1. First attempt execution via trusted Firebase Cloud Function (Backend Authority)
       try {
-        const cloudRes = await callAcceptPointTransfer(requestId);
-        if (cloudRes && cloudRes.success) {
-          functionSucceeded = true;
-        }
-      } catch (cfErr: any) {
-        console.warn('Cloud Function acceptPointTransfer not available or returned error, falling back to client transaction:', cfErr?.message);
-      }
-
-      // 2. If Cloud Function was not executed, fallback to client transaction
-      if (!functionSucceeded) {
-        try {
-          const requestRef = doc(activeDb, 'pointTransferRequests', requestId);
-          await runTransaction(activeDb, async (transaction) => {
-            const reqDoc = await transaction.get(requestRef);
-            if (!reqDoc.exists()) {
-              throw new Error('Transfer request not found on server.');
-            }
-            const reqData = reqDoc.data() as PointTransferRequest;
-            if (reqData.status !== 'pending') {
-              throw new Error(`Transfer request has already been ${reqData.status}.`);
-            }
-
-            // Verify recipient ownership on server
-            const serverIsRecipient =
-              reqData.recipientId === currentUser.id ||
-              reqData.recipientEmail.toLowerCase() === currentUser.email.toLowerCase();
-            if (!serverIsRecipient) {
-              throw new Error('Unauthorized: You are not the recipient of this transfer request.');
-            }
-
-            const senderRef = doc(activeDb, 'users', reqData.senderId);
-            const recipientRef = doc(activeDb, 'users', currentUser.id);
-
-            const [sDoc, rDoc] = await Promise.all([
-              transaction.get(senderRef),
-              transaction.get(recipientRef),
-            ]);
-
-            if (!sDoc.exists() || !rDoc.exists()) {
-              throw new Error('Sender or recipient user profile does not exist.');
-            }
-
-            const sData = sDoc.data();
-            const rData = rDoc.data();
-            const sBalance = typeof sData.pointsBalance === 'number' ? sData.pointsBalance : 0;
-            if (sBalance < reqData.points) {
-              throw new Error(`Sender has insufficient points balance (${sBalance} pts available, ${reqData.points} requested).`);
-            }
-
-            const rBalance = typeof rData.pointsBalance === 'number' ? rData.pointsBalance : 0;
-
-            // 1. Debit sender
-            transaction.update(senderRef, {
-              pointsBalance: sBalance - reqData.points,
-              points: sBalance - reqData.points,
-              updatedAt: new Date().toISOString(),
-            });
-
-            // 2. Credit recipient
-            transaction.update(recipientRef, {
-              pointsBalance: rBalance + reqData.points,
-              points: rBalance + reqData.points,
-              updatedAt: new Date().toISOString(),
-            });
-
-            // 3. Sender debit ledger
-            const sTxRef = doc(collection(activeDb, 'pointTransactions'));
-            transaction.set(sTxRef, {
-              id: sTxRef.id,
-              userId: reqData.senderId,
-              type: 'transfer_sent',
-              points: -reqData.points,
-              relatedId: requestId,
-              description: `Transferred points to ${currentUser.fullName} (${currentUser.email})`,
-              ruleSnapshot: 'P2P Point Transfer',
-              status: 'completed',
-              createdAt: new Date().toISOString(),
-            });
-
-            // 4. Recipient credit ledger
-            const rTxRef = doc(collection(activeDb, 'pointTransactions'));
-            transaction.set(rTxRef, {
-              id: rTxRef.id,
-              userId: currentUser.id,
-              type: 'transfer_received',
-              points: reqData.points,
-              relatedId: requestId,
-              description: `Received points transfer from ${reqData.senderName} (${reqData.senderEmail})`,
-              ruleSnapshot: 'P2P Point Transfer',
-              status: 'completed',
-              createdAt: new Date().toISOString(),
-            });
-
-            // 5. Update request status to 'accepted'
-            transaction.update(requestRef, {
-              status: 'accepted',
-              processedAt: new Date().toISOString(),
-            });
-
-            // 6. Notify Sender: Point-transfer accepted (Event B)
-            const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
-            transaction.set(notifRef, {
-              id: `notif_transfer_acc_${requestId}`,
-              userId: reqData.senderId,
-              title: 'Point Transfer Accepted',
-              message: `${currentUser.fullName} accepted your transfer of ${reqData.points} REFERO Points.`,
-              type: 'transfer',
-              link: 'transfers',
-              read: false,
-              createdAt: new Date().toISOString(),
-            });
-          });
-        } catch (err: any) {
-          console.warn('Cross-user atomic transaction note:', err.code, err.message);
-          // Resilient fallback: Update the transfer request directly (authorized for recipient),
-          // update recipient profile and ledger, and notify sender.
-          try {
-            const requestRef = doc(activeDb, 'pointTransferRequests', requestId);
-            await updateDoc(requestRef, {
-              status: 'accepted',
-              processedAt: new Date().toISOString(),
-            });
-
-            // Credit recipient user document
-            try {
-              const recipientRef = doc(activeDb, 'users', currentUser.id);
-              await updateDoc(recipientRef, {
-                pointsBalance: (currentUser.pointsBalance || 0) + request.points,
-                points: (currentUser.pointsBalance || 0) + request.points,
-                updatedAt: new Date().toISOString(),
-              });
-            } catch (rErr) {
-              console.warn('Recipient document update notice:', rErr);
-            }
-
-            // Write recipient ledger entry
-            try {
-              const rTxRef = doc(collection(activeDb, 'pointTransactions'));
-              await setDoc(rTxRef, {
-                id: rTxRef.id,
-                userId: currentUser.id,
-                type: 'transfer_received',
-                points: request.points,
-                relatedId: requestId,
-                description: `Received points transfer from ${request.senderName}`,
-                ruleSnapshot: 'P2P Point Transfer',
-                status: 'completed',
-                createdAt: new Date().toISOString(),
-              });
-            } catch (ledgerErr) {
-              console.warn('Recipient ledger notice:', ledgerErr);
-            }
-
-            // Write sender notification
-            try {
-              const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
-              await setDoc(notifRef, {
-                id: `notif_transfer_acc_${requestId}`,
-                userId: request.senderId,
-                title: 'Point Transfer Accepted',
-                message: `${currentUser.fullName} accepted your transfer of ${request.points} REFERO Points.`,
-                type: 'transfer',
-                link: 'transfers',
-                read: false,
-                createdAt: new Date().toISOString(),
-              });
-            } catch (notifErr) {
-              console.warn('Sender notification notice:', notifErr);
-            }
-          } catch (directUpdateErr: any) {
-            console.error('Accept transfer fallback error:', directUpdateErr);
-            return {
-              success: false,
-              message: directUpdateErr.message || 'Failed to accept point transfer.',
-            };
+        const requestRef = doc(activeDb, 'pointTransferRequests', requestId);
+        await runTransaction(activeDb, async (transaction) => {
+          const reqDoc = await transaction.get(requestRef);
+          if (!reqDoc.exists()) {
+            throw new Error('Transfer request not found on server.');
           }
-        }
+          const reqData = reqDoc.data() as PointTransferRequest;
+          if (reqData.status !== 'pending') {
+            throw new Error(`Transfer request has already been ${reqData.status}.`);
+          }
+
+          // Verify recipient ownership on server
+          const serverIsRecipient =
+            reqData.recipientId === currentUser.id ||
+            reqData.recipientEmail.toLowerCase() === currentUser.email.toLowerCase();
+          if (!serverIsRecipient) {
+            throw new Error('Unauthorized: You are not the recipient of this transfer request.');
+          }
+
+          if (reqData.senderId === currentUser.id) {
+            throw new Error('You cannot accept your own point transfer request.');
+          }
+
+          const senderRef = doc(activeDb, 'users', reqData.senderId);
+          const recipientRef = doc(activeDb, 'users', currentUser.id);
+
+          const [sDoc, rDoc] = await Promise.all([
+            transaction.get(senderRef),
+            transaction.get(recipientRef),
+          ]);
+
+          if (!sDoc.exists() || !rDoc.exists()) {
+            throw new Error('Sender or recipient user profile does not exist.');
+          }
+
+          const sData = sDoc.data();
+          const rData = rDoc.data();
+          const sBalance = typeof sData.pointsBalance === 'number' ? sData.pointsBalance : 0;
+          if (sBalance < reqData.points) {
+            throw new Error(`Sender has insufficient points balance (${sBalance} pts available, ${reqData.points} requested).`);
+          }
+
+          const rBalance = typeof rData.pointsBalance === 'number' ? rData.pointsBalance : 0;
+          const transferPoints = Number(reqData.points);
+          const timestamp = new Date().toISOString();
+
+          // 1. Debit sender with lastTransferRequestId reference for security rules
+          transaction.update(senderRef, {
+            pointsBalance: sBalance - transferPoints,
+            points: sBalance - transferPoints,
+            lastTransferRequestId: requestId,
+            updatedAt: timestamp,
+          });
+
+          // 2. Credit recipient with lastTransferRequestId reference
+          transaction.update(recipientRef, {
+            pointsBalance: rBalance + transferPoints,
+            points: rBalance + transferPoints,
+            lastTransferRequestId: requestId,
+            updatedAt: timestamp,
+          });
+
+          // 3. Sender debit ledger
+          const sTxRef = doc(collection(activeDb, 'pointTransactions'));
+          transaction.set(sTxRef, {
+            id: sTxRef.id,
+            userId: reqData.senderId,
+            type: 'transfer_sent',
+            points: -transferPoints,
+            relatedId: requestId,
+            description: `Transferred points to ${currentUser.fullName} (${currentUser.email})`,
+            ruleSnapshot: 'P2P Point Transfer',
+            status: 'completed',
+            createdAt: timestamp,
+          });
+
+          // 4. Recipient credit ledger
+          const rTxRef = doc(collection(activeDb, 'pointTransactions'));
+          transaction.set(rTxRef, {
+            id: rTxRef.id,
+            userId: currentUser.id,
+            type: 'transfer_received',
+            points: transferPoints,
+            relatedId: requestId,
+            description: `Received points transfer from ${reqData.senderName} (${reqData.senderEmail})`,
+            ruleSnapshot: 'P2P Point Transfer',
+            status: 'completed',
+            createdAt: timestamp,
+          });
+
+          // 5. Update request status to 'accepted'
+          transaction.update(requestRef, {
+            status: 'accepted',
+            recipientId: currentUser.id,
+            processedAt: timestamp,
+          });
+
+          // 6. Notify Sender: Point-transfer accepted (Event B)
+          const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
+          transaction.set(notifRef, {
+            id: `notif_transfer_acc_${requestId}`,
+            userId: reqData.senderId,
+            title: 'Point Transfer Accepted',
+            message: `${currentUser.fullName} accepted your transfer of ${reqData.points} REFERO Points.`,
+            type: 'transfer',
+            link: 'transfers',
+            read: false,
+            createdAt: timestamp,
+          });
+        });
+      } catch (err: any) {
+        console.error('Accept transfer transaction error:', err);
+        return {
+          success: false,
+          message: err.message || 'Failed to accept point transfer.',
+        };
       }
     } else {
       // Demo Mode execution
@@ -1389,7 +1481,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setNotifications((prev) => [senderNotif, ...prev]);
     }
 
-    const pointsAmount = request.points;
     updateCurrentUserProfile({
       pointsBalance: currentUser.pointsBalance + pointsAmount,
     });
@@ -1430,40 +1521,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const activeDb = db;
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
-      let functionSucceeded = false;
       try {
-        const cloudRes = await callDeclinePointTransfer(requestId);
-        if (cloudRes && cloudRes.success) {
-          functionSucceeded = true;
-        }
-      } catch (cfErr: any) {
-        console.warn('Cloud Function declinePointTransfer notice:', cfErr?.message);
-      }
+        const timestamp = new Date().toISOString();
+        const requestRef = doc(activeDb, 'pointTransferRequests', requestId);
+        await updateDoc(requestRef, {
+          status: 'rejected',
+          recipientId: currentUser.id,
+          processedAt: timestamp,
+        });
 
-      if (!functionSucceeded) {
-        try {
-          const requestRef = doc(activeDb, 'pointTransferRequests', requestId);
-          await updateDoc(requestRef, {
-            status: 'rejected',
-            processedAt: new Date().toISOString(),
-          });
-
-          // Notify Sender: Point-transfer declined (Event B)
-          const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_dec_${requestId}`);
-          await setDoc(notifRef, {
-            id: `notif_transfer_dec_${requestId}`,
-            userId: request.senderId,
-            title: 'Point Transfer Declined',
-            message: `${currentUser.fullName} declined your transfer request of ${request.points} REFERO Points.`,
-            type: 'transfer',
-            link: 'transfers',
-            read: false,
-            createdAt: new Date().toISOString(),
-          });
-        } catch (err: any) {
-          console.error('Firestore reject transfer error:', err);
-          return { success: false, message: err.message || 'Failed to decline transfer.' };
-        }
+        // Notify Sender: Point-transfer declined (Event B)
+        const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_dec_${requestId}`);
+        await setDoc(notifRef, {
+          id: `notif_transfer_dec_${requestId}`,
+          userId: request.senderId,
+          title: 'Point Transfer Declined',
+          message: `${currentUser.fullName} declined your transfer request of ${request.points} REFERO Points.`,
+          type: 'transfer',
+          link: 'transfers',
+          read: false,
+          createdAt: timestamp,
+        });
+      } catch (err: any) {
+        console.error('Firestore reject transfer error:', err);
+        return { success: false, message: err.message || 'Failed to decline transfer.' };
       }
     }
 
@@ -1488,7 +1569,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       )
     );
 
-    showToast('Transfer request was declined', 'info');
+    showToast('Point transfer request declined.');
     return { success: true, message: 'Transfer request rejected.' };
   };
 
@@ -1590,16 +1671,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (isFirebaseConfigured() && db) {
       try {
         await setDoc(doc(db, 'shops', newShop.id), cleanUndefinedFields(newShop));
+        // Persist shopId on the applicant's user document so page refresh preserves it
+        await updateDoc(doc(db, 'users', currentUser.id), { shopId: newShop.id }).catch(() => {});
       } catch (err) {
         console.warn('Firestore shop application create error:', err);
       }
     }
 
-    addNotification({
+    // 1. Applicant notification
+    await addNotification({
       userId: currentUser.id,
       title: 'Seller Application Received',
       message: `Your storefront application for "${shopData.name}" has been submitted and is pending administrator review.`,
       type: 'system',
+    });
+
+    // 2. Admin notification (Event: Seller Application Submitted)
+    const adminNotifId = `notif_seller_app_${newShop.id}`;
+    await addNotification({
+      id: adminNotifId,
+      userId: 'admin',
+      title: 'New Seller Storefront Application',
+      message: `${currentUser.fullName} (${currentUser.email}) submitted application for "${shopData.name}". Review store details to approve or reject.`,
+      type: 'system',
+      link: 'admin_shops',
+      metadata: {
+        shopId: newShop.id,
+        applicantId: currentUser.id,
+        applicantName: currentUser.fullName,
+        applicantEmail: currentUser.email,
+        shopName: shopData.name,
+      },
     });
 
     const log: AuditLog = {
@@ -1630,124 +1732,292 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast('Shop details and policies updated.');
   };
 
-  const updateOrderItemStatus = (orderId: string, newStatus: Order['orderStatus']) => {
-    setOrders((prev) =>
-      prev.map((ord) => {
-        if (ord.id !== orderId) return ord;
+  const updateOrderItemStatus = async (orderId: string, newStatus: Order['orderStatus']) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      showToast('Order not found.', 'error');
+      return;
+    }
 
-        const updated = { ...ord, orderStatus: newStatus };
-
-        // If transitioning to DELIVERED, credit earned points & check referral reward!
-        if (newStatus === 'delivered' && !ord.pointsCredited && ord.pointsEarned > 0) {
-          updated.pointsCredited = true;
-          updated.deliveredAt = new Date().toISOString();
-
-          // Credit customer balance if matching active customer
-          if (currentUser && currentUser.id === ord.customerId) {
-            updateCurrentUserProfile({
-              pointsBalance: currentUser.pointsBalance + ord.pointsEarned,
-              pendingPoints: Math.max(0, (currentUser.pendingPoints || 0) - ord.pointsEarned),
-            });
-          }
-
-          // Add purchase points transaction to ledger
-          const earnTx: PointTransaction = {
-            id: `tx_${Date.now()}_earn`,
-            userId: ord.customerId,
-            type: 'order_earned',
-            points: ord.pointsEarned,
-            relatedId: ord.id,
-            description: `Earned on delivered order #${ord.orderNumber}`,
-            ruleSnapshot: `Qualifying delivery earning rule`,
-            status: 'completed',
-            createdAt: new Date().toISOString(),
-          };
-
-          setPointTransactions((tPrev) => [earnTx, ...tPrev]);
-
-          // Notify customer of points earned
-          const earnNotif: NotificationItem = {
-            id: `notif_order_delivered_${ord.id}`,
-            userId: ord.customerId,
-            title: `Points Earned! (+${ord.pointsEarned} pts)`,
-            message: `Order #${ord.orderNumber} was marked delivered. ${ord.pointsEarned} REFERO Points have been added to your balance.`,
-            type: 'points',
-            link: 'points',
-            read: false,
-            createdAt: new Date().toISOString(),
-          };
-          setNotifications((prev) => [earnNotif, ...prev]);
-          if (isFirebaseConfigured() && db && !isAdminPreviewActive) {
-            setDoc(doc(db, 'notifications', earnNotif.id), earnNotif).catch(() => {});
-          }
-
-          // Check if this fulfills a first-order referral reward!
-          const userReferral = referrals.find(
-            (r) => r.referredUserId === ord.customerId && r.status === 'registered'
-          );
-          if (userReferral) {
-            setReferrals((rPrev) =>
-              rPrev.map((ref) =>
-                ref.id === userReferral.id
-                  ? {
-                      ...ref,
-                      status: 'reward_issued',
-                      qualifyingOrderId: ord.id,
-                      rewardedAt: new Date().toISOString(),
-                    }
-                  : ref
-              )
-            );
-
-            // Add referral bonus ledger for referrer
-            const refBonusTx: PointTransaction = {
-              id: `tx_${Date.now()}_refbonus`,
-              userId: userReferral.referrerUserId,
-              type: 'referral_bonus',
-              points: userReferral.rewardPoints,
-              relatedId: ord.id,
-              description: `Referral Reward: ${ord.customerName}'s first qualifying delivered order`,
-              ruleSnapshot: `Referral rule: ${userReferral.rewardPoints} pts`,
-              status: 'completed',
-              createdAt: new Date().toISOString(),
-            };
-
-            setPointTransactions((tPrev) => [refBonusTx, ...tPrev]);
-
-            // Notify Referrer that reward was earned (Event D)
-            const refRewardNotif: NotificationItem = {
-              id: `notif_ref_reward_${ord.id}`,
-              userId: userReferral.referrerUserId,
-              title: `Referral Reward Earned! (+${userReferral.rewardPoints} pts)`,
-              message: `You earned ${userReferral.rewardPoints} REFERO Points because ${ord.customerName} completed their first qualifying delivered order (#${ord.orderNumber}).`,
-              type: 'points',
-              link: 'points',
-              read: false,
-              createdAt: new Date().toISOString(),
-            };
-            setNotifications((prev) => [refRewardNotif, ...prev]);
-            if (isFirebaseConfigured() && db && !isAdminPreviewActive) {
-              setDoc(doc(db, 'notifications', refRewardNotif.id), refRewardNotif).catch(() => {});
-            }
-          }
-        }
-
-        return updated;
-      })
+    // Authorization check: Only Admin or the Seller of the order's shop can change status
+    const isAdminUser = currentUser?.role === 'admin';
+    const isOrderSeller = currentUser?.role === 'shopkeeper' && currentUser.shopId && (
+      (targetOrder as any).shopId === currentUser.shopId ||
+      targetOrder.items.some((it) => it.shopId === currentUser.shopId)
     );
 
-    if (isFirebaseConfigured() && db) {
+    if (!isAdminUser && !isOrderSeller) {
+      showToast('Unauthorized: Only Admin or the designated Seller can update order status.', 'error');
+      return;
+    }
+
+    const activeDb = db;
+    const timestamp = new Date().toISOString();
+
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
       try {
-        updateDoc(doc(db, 'orders', orderId), {
+        const orderRef = doc(activeDb, 'orders', orderId);
+        await updateDoc(orderRef, {
           orderStatus: newStatus,
-          ...(newStatus === 'delivered' ? { pointsCredited: true, deliveredAt: new Date().toISOString() } : {}),
-        }).catch((err) => console.warn('Firestore updateOrderItemStatus note:', err));
-      } catch (err) {
-        console.warn('Firestore updateOrderItemStatus note:', err);
+          ...(newStatus === 'delivered' ? { deliveredAt: timestamp } : {}),
+        });
+
+        // If seller marks as delivered, send customer a notification prompting confirmation
+        if (newStatus === 'delivered') {
+          const custNotifRef = doc(collection(activeDb, 'notifications'), `notif_order_delivered_${orderId}`);
+          await setDoc(custNotifRef, {
+            id: `notif_order_delivered_${orderId}`,
+            userId: targetOrder.customerId,
+            title: 'Order Delivered — Please Confirm Receipt!',
+            message: `Order #${targetOrder.orderNumber} has arrived! Tap "Confirm Received" in your orders to claim your ${targetOrder.pointsEarned} REFERO Points.`,
+            type: 'order',
+            link: 'orders',
+            read: false,
+            createdAt: timestamp,
+          });
+        }
+      } catch (err: any) {
+        console.warn('Firestore update order status notice:', err);
       }
     }
 
-    showToast(`Order #${orderId} marked as ${newStatus}`);
+    // Update in-memory state
+    setOrders((prev) =>
+      prev.map((ord) => {
+        if (ord.id !== orderId) return ord;
+        return {
+          ...ord,
+          orderStatus: newStatus,
+          ...(newStatus === 'delivered' ? { deliveredAt: timestamp } : {}),
+        };
+      })
+    );
+
+    if (newStatus === 'delivered') {
+      const custNotif: NotificationItem = {
+        id: `notif_order_delivered_${targetOrder.id}`,
+        userId: targetOrder.customerId,
+        title: 'Order Delivered — Please Confirm Receipt!',
+        message: `Order #${targetOrder.orderNumber} has arrived! Tap "Confirm Received" in your orders to claim your ${targetOrder.pointsEarned} REFERO Points.`,
+        type: 'order',
+        link: 'orders',
+        read: false,
+        createdAt: timestamp,
+      };
+      setNotifications((prev) => [custNotif, ...prev]);
+    }
+
+    showToast(`Order #${targetOrder.orderNumber} status updated to "${newStatus}".`);
+  };
+
+  /**
+   * Simplified Customer Delivery Confirmation:
+   * When the customer receives their order, they click "Confirm Received".
+   * This transitions the order from 'delivered' to 'completed' and atomically
+   * credits eligible loyalty points to the customer's balance exactly once.
+   */
+  const confirmOrderReceived = async (orderId: string): Promise<{ success: boolean; message: string }> => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      showToast('Order not found.', 'error');
+      return { success: false, message: 'Order not found.' };
+    }
+
+    if (!currentUser) {
+      showToast('Please sign in to confirm receipt.', 'error');
+      return { success: false, message: 'Must be logged in.' };
+    }
+
+    const isCustomer = currentUser.id === targetOrder.customerId;
+    const isAdmin = currentUser.role === 'admin';
+
+    if (!isCustomer && !isAdmin) {
+      showToast('Unauthorized: Only the customer who placed this order can confirm receipt.', 'error');
+      return { success: false, message: 'Unauthorized: Only the customer can confirm receipt.' };
+    }
+
+    if (targetOrder.pointsCredited || targetOrder.orderStatus === 'completed') {
+      showToast('This order has already been confirmed and completed.', 'info');
+      return { success: false, message: 'Already completed.' };
+    }
+
+    if (targetOrder.orderStatus !== 'delivered' && !isAdmin) {
+      showToast('Order must be marked as Delivered by the seller before confirming receipt.', 'error');
+      return { success: false, message: 'Order is not delivered yet.' };
+    }
+
+    const activeDb = db;
+    const timestamp = new Date().toISOString();
+
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        const orderRef = doc(activeDb, 'orders', orderId);
+        const customerRef = doc(activeDb, 'users', targetOrder.customerId);
+
+        await runTransaction(activeDb, async (transaction) => {
+          const ordSnap = await transaction.get(orderRef);
+          if (!ordSnap.exists()) {
+            throw new Error('Order does not exist on server.');
+          }
+          const ordData = ordSnap.data() as Order;
+          if (ordData.pointsCredited || ordData.orderStatus === 'completed') {
+            throw new Error('Order has already been confirmed as completed.');
+          }
+
+          const custSnap = await transaction.get(customerRef);
+          if (!custSnap.exists()) {
+            throw new Error('Customer user profile does not exist.');
+          }
+
+          const custData = custSnap.data();
+          const curBal = typeof custData.pointsBalance === 'number' ? custData.pointsBalance : 0;
+          const curPending = typeof custData.pendingPoints === 'number' ? custData.pendingPoints : 0;
+          const ptsToAward = ordData.pointsEarned || targetOrder.pointsEarned;
+
+          // 1. Credit customer points balance with reference
+          transaction.update(customerRef, {
+            pointsBalance: curBal + ptsToAward,
+            points: curBal + ptsToAward,
+            pendingPoints: Math.max(0, curPending - ptsToAward),
+            lastDeliveryOrderId: orderId,
+            updatedAt: timestamp,
+          });
+
+          // 2. Create immutable pointTransactions ledger entry
+          const earnLedgerRef = doc(collection(activeDb, 'pointTransactions'));
+          transaction.set(earnLedgerRef, {
+            id: earnLedgerRef.id,
+            userId: ordData.customerId,
+            type: 'order_earned',
+            points: ptsToAward,
+            relatedId: orderId,
+            description: `Earned on completed order #${ordData.orderNumber}`,
+            ruleSnapshot: 'Customer confirmed order receipt',
+            status: 'completed',
+            createdAt: timestamp,
+          });
+
+          // 3. Customer notification
+          const earnNotifRef = doc(collection(activeDb, 'notifications'), `notif_order_completed_${orderId}`);
+          transaction.set(earnNotifRef, {
+            id: `notif_order_completed_${orderId}`,
+            userId: ordData.customerId,
+            title: `Points Credited! (+${ptsToAward} pts)`,
+            message: `You confirmed receipt for order #${ordData.orderNumber}. ${ptsToAward} REFERO Points have been added to your balance!`,
+            type: 'points',
+            link: 'points',
+            read: false,
+            createdAt: timestamp,
+          });
+
+          // 4. Update order document to 'completed'
+          transaction.update(orderRef, {
+            orderStatus: 'completed',
+            pointsCredited: true,
+            completedAt: timestamp,
+            confirmedBy: isCustomer ? 'customer' : 'admin',
+          });
+        });
+      } catch (err: any) {
+        console.error('Confirm order received error:', err);
+        showToast(err.message || 'Failed to confirm receipt.', 'error');
+        return { success: false, message: err.message || 'Failed to confirm receipt.' };
+      }
+    }
+
+    // Update in-memory state
+    setOrders((prev) =>
+      prev.map((ord) =>
+        ord.id === orderId
+          ? {
+              ...ord,
+              orderStatus: 'completed',
+              pointsCredited: true,
+              completedAt: timestamp,
+              confirmedBy: isCustomer ? 'customer' : 'admin',
+            }
+          : ord
+      )
+    );
+
+    if (currentUser && currentUser.id === targetOrder.customerId) {
+      updateCurrentUserProfile({
+        pointsBalance: currentUser.pointsBalance + targetOrder.pointsEarned,
+        pendingPoints: Math.max(0, (currentUser.pendingPoints || 0) - targetOrder.pointsEarned),
+      });
+    }
+
+    const earnTx: PointTransaction = {
+      id: `tx_${Date.now()}_earn`,
+      userId: targetOrder.customerId,
+      type: 'order_earned',
+      points: targetOrder.pointsEarned,
+      relatedId: targetOrder.id,
+      description: `Earned on completed order #${targetOrder.orderNumber}`,
+      ruleSnapshot: 'Customer confirmed order receipt',
+      status: 'completed',
+      createdAt: timestamp,
+    };
+    setPointTransactions((tPrev) => [earnTx, ...tPrev]);
+
+    const earnNotif: NotificationItem = {
+      id: `notif_order_completed_${targetOrder.id}`,
+      userId: targetOrder.customerId,
+      title: `Points Credited! (+${targetOrder.pointsEarned} pts)`,
+      message: `You confirmed receipt for order #${targetOrder.orderNumber}. ${targetOrder.pointsEarned} REFERO Points have been added to your balance!`,
+      type: 'points',
+      link: 'points',
+      read: false,
+      createdAt: timestamp,
+    };
+    setNotifications((prev) => [earnNotif, ...prev]);
+
+    // Check if fulfills first-order referral bonus
+    const userReferral = referrals.find(
+      (r) => r.referredUserId === targetOrder.customerId && r.status === 'registered'
+    );
+    if (userReferral) {
+      setReferrals((rPrev) =>
+        rPrev.map((ref) =>
+          ref.id === userReferral.id
+            ? {
+                ...ref,
+                status: 'reward_issued',
+                qualifyingOrderId: targetOrder.id,
+                rewardedAt: timestamp,
+              }
+            : ref
+        )
+      );
+
+      const refBonusTx: PointTransaction = {
+        id: `tx_${Date.now()}_refbonus`,
+        userId: userReferral.referrerUserId,
+        type: 'referral_bonus',
+        points: userReferral.rewardPoints,
+        relatedId: targetOrder.id,
+        description: `Referral Reward: ${targetOrder.customerName}'s first qualifying completed order`,
+        ruleSnapshot: `Referral rule: ${userReferral.rewardPoints} pts`,
+        status: 'completed',
+        createdAt: timestamp,
+      };
+      setPointTransactions((tPrev) => [refBonusTx, ...tPrev]);
+
+      const refRewardNotif: NotificationItem = {
+        id: `notif_ref_reward_${targetOrder.id}`,
+        userId: userReferral.referrerUserId,
+        title: `Referral Reward Earned! (+${userReferral.rewardPoints} pts)`,
+        message: `You earned ${userReferral.rewardPoints} REFERO Points because ${targetOrder.customerName} completed their first qualifying order (#${targetOrder.orderNumber}).`,
+        type: 'points',
+        link: 'points',
+        read: false,
+        createdAt: timestamp,
+      };
+      setNotifications((prev) => [refRewardNotif, ...prev]);
+    }
+
+    showToast(`Order confirmed! +${targetOrder.pointsEarned} REFERO Points credited.`, 'success');
+    return { success: true, message: 'Order receipt confirmed successfully.' };
   };
 
   // Admin Actions
@@ -1773,7 +2043,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const approveShop = async (shopId: string) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Administrator privileges required to approve shops.', 'error');
+      return;
+    }
     const targetShop = shops.find((s) => s.id === shopId);
+    const timestamp = new Date().toISOString();
+    const adminEmail = currentUser?.email || 'admin@refero.com.bd';
+
     setShops((prev) =>
       prev.map((s) =>
         s.id === shopId
@@ -1782,50 +2059,105 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               status: 'approved',
               rejectionReason: undefined,
               suspensionReason: undefined,
-              reviewedAt: new Date().toISOString(),
-              reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+              reviewedAt: timestamp,
+              reviewedBy: adminEmail,
             }
           : s
       )
     );
-    if (isFirebaseConfigured() && db) {
+
+    if (targetShop && currentUser?.id === targetShop.ownerId) {
+      updateCurrentUserProfile({ role: 'shopkeeper', shopId });
+    }
+
+    if (isFirebaseConfigured() && db && targetShop) {
       try {
-        await updateDoc(doc(db, 'shops', shopId), {
-          status: 'approved',
-          reviewedAt: new Date().toISOString(),
-          reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+        const shopRef = doc(db, 'shops', shopId);
+        const userRef = doc(db, 'users', targetShop.ownerId);
+
+        await runTransaction(db, async (txn) => {
+          txn.update(shopRef, {
+            status: 'approved',
+            rejectionReason: '',
+            suspensionReason: '',
+            reviewedAt: timestamp,
+            reviewedBy: adminEmail,
+          });
+          txn.update(userRef, {
+            role: 'shopkeeper',
+            shopId: shopId,
+            updatedAt: timestamp,
+          });
         });
       } catch (err) {
-        console.warn('Firestore approveShop error:', err);
+        console.warn('runTransaction approveShop error, falling back to sequential updateDoc:', err);
+        try {
+          await updateDoc(doc(db, 'shops', shopId), {
+            status: 'approved',
+            rejectionReason: '',
+            suspensionReason: '',
+            reviewedAt: timestamp,
+            reviewedBy: adminEmail,
+          });
+          await updateDoc(doc(db, 'users', targetShop.ownerId), {
+            role: 'shopkeeper',
+            shopId: shopId,
+            updatedAt: timestamp,
+          });
+        } catch (fallbackErr) {
+          console.warn('Fallback approveShop error:', fallbackErr);
+        }
       }
     }
+
     if (targetShop) {
-      addNotification({
+      // 1. Applicant notification with direct link to Shopkeeper Dashboard
+      await addNotification({
         userId: targetShop.ownerId,
-        title: 'Shop Approved & Published!',
-        message: `Congratulations! Your store "${targetShop.name}" is now approved and live on REFERO.`,
+        title: 'Shop Approved & Shopkeeper Access Granted!',
+        message: `Congratulations! Your store "${targetShop.name}" is now approved and live on REFERO. You now have full access to your Shopkeeper Portal.`,
         type: 'system',
+        link: 'shopkeeper_dashboard',
       });
+
+      // 2. Mark the Admin seller application notification as read
+      const adminNotifId = `notif_seller_app_${shopId}`;
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === adminNotifId ? { ...n, read: true } : n))
+      );
+      if (isFirebaseConfigured() && db) {
+        try {
+          await updateDoc(doc(db, 'notifications', adminNotifId), { read: true });
+        } catch (_) {}
+      }
     }
+
     const log: AuditLog = {
       id: `audit_${Date.now()}`,
       adminId: currentUser?.id || 'admin',
-      adminEmail: currentUser?.email || 'admin@refero.com.bd',
+      adminEmail: adminEmail,
       action: 'SHOP_APPLICATION_APPROVED',
-      details: `Approved shop application ID ${shopId} (${targetShop?.name || 'Unknown'})`,
-      timestamp: new Date().toISOString(),
+      details: `Approved shop application ID ${shopId} (${targetShop?.name || 'Unknown'}). Owner ${targetShop?.ownerId} upgraded to shopkeeper.`,
+      timestamp,
     };
     setAuditLogs((prev) => [log, ...prev]);
-    showToast('Shop approved and published to marketplace.');
+    showToast('Shop approved and published to marketplace. Owner promoted to Shopkeeper.');
   };
 
   const rejectShop = async (shopId: string, reason: string) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Administrator privileges required to reject shops.', 'error');
+      return;
+    }
     if (!reason || reason.trim().length === 0) {
       showToast('A mandatory rejection reason is required.', 'error');
       return;
     }
     const trimmedReason = reason.trim();
     const targetShop = shops.find((s) => s.id === shopId);
+    const timestamp = new Date().toISOString();
+    const adminEmail = currentUser?.email || 'admin@refero.com.bd';
+
     setShops((prev) =>
       prev.map((s) =>
         s.id === shopId
@@ -1833,51 +2165,91 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               ...s,
               status: 'rejected',
               rejectionReason: trimmedReason,
-              reviewedAt: new Date().toISOString(),
-              reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+              reviewedAt: timestamp,
+              reviewedBy: adminEmail,
             }
           : s
       )
     );
-    if (isFirebaseConfigured() && db) {
+
+    if (isFirebaseConfigured() && db && targetShop) {
       try {
-        await updateDoc(doc(db, 'shops', shopId), {
-          status: 'rejected',
-          rejectionReason: trimmedReason,
-          reviewedAt: new Date().toISOString(),
-          reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+        const shopRef = doc(db, 'shops', shopId);
+        const userRef = doc(db, 'users', targetShop.ownerId);
+        await runTransaction(db, async (txn) => {
+          txn.update(shopRef, {
+            status: 'rejected',
+            rejectionReason: trimmedReason,
+            reviewedAt: timestamp,
+            reviewedBy: adminEmail,
+          });
+          txn.update(userRef, {
+            role: 'customer',
+            updatedAt: timestamp,
+          });
         });
       } catch (err) {
         console.warn('Firestore rejectShop error:', err);
+        try {
+          await updateDoc(doc(db, 'shops', shopId), {
+            status: 'rejected',
+            rejectionReason: trimmedReason,
+            reviewedAt: timestamp,
+            reviewedBy: adminEmail,
+          });
+        } catch (subErr) {
+          console.warn('Fallback rejectShop error:', subErr);
+        }
       }
     }
+
     if (targetShop) {
-      addNotification({
+      await addNotification({
         userId: targetShop.ownerId,
-        title: 'Shop Application Rejected',
-        message: `Your store application was rejected. Reason: ${trimmedReason}`,
+        title: 'Shop Application Status Update',
+        message: `Your store application for "${targetShop.name}" was not approved at this time. Reason: ${trimmedReason}. You may review requirements and reapply.`,
         type: 'system',
+        link: 'apply_seller',
       });
+
+      // Mark the Admin seller application notification as read
+      const adminNotifId = `notif_seller_app_${shopId}`;
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === adminNotifId ? { ...n, read: true } : n))
+      );
+      if (isFirebaseConfigured() && db) {
+        try {
+          await updateDoc(doc(db, 'notifications', adminNotifId), { read: true });
+        } catch (_) {}
+      }
     }
+
     const log: AuditLog = {
       id: `audit_${Date.now()}`,
       adminId: currentUser?.id || 'admin',
-      adminEmail: currentUser?.email || 'admin@refero.com.bd',
+      adminEmail: adminEmail,
       action: 'SHOP_APPLICATION_REJECTED',
       details: `Rejected shop ID ${shopId}. Mandatory Reason: ${trimmedReason}`,
-      timestamp: new Date().toISOString(),
+      timestamp,
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast('Shop application rejected with mandatory reason recorded.', 'info');
   };
 
   const suspendShop = async (shopId: string, reason: string) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Administrator privileges required to suspend shops.', 'error');
+      return;
+    }
     if (!reason || reason.trim().length === 0) {
       showToast('A mandatory suspension reason is required.', 'error');
       return;
     }
     const trimmedReason = reason.trim();
     const targetShop = shops.find((s) => s.id === shopId);
+    const timestamp = new Date().toISOString();
+    const adminEmail = currentUser?.email || 'admin@refero.com.bd';
+
     setShops((prev) =>
       prev.map((s) =>
         s.id === shopId
@@ -1885,8 +2257,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               ...s,
               status: 'suspended',
               suspensionReason: trimmedReason,
-              reviewedAt: new Date().toISOString(),
-              reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+              reviewedAt: timestamp,
+              reviewedBy: adminEmail,
             }
           : s
       )
@@ -1896,8 +2268,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await updateDoc(doc(db, 'shops', shopId), {
           status: 'suspended',
           suspensionReason: trimmedReason,
-          reviewedAt: new Date().toISOString(),
-          reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+          reviewedAt: timestamp,
+          reviewedBy: adminEmail,
         });
       } catch (err) {
         console.warn('Firestore suspendShop error:', err);
@@ -1914,17 +2286,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const log: AuditLog = {
       id: `audit_${Date.now()}`,
       adminId: currentUser?.id || 'admin',
-      adminEmail: currentUser?.email || 'admin@refero.com.bd',
+      adminEmail: adminEmail,
       action: 'SHOP_SUSPENDED',
       details: `Suspended shop ID ${shopId}. Mandatory Reason: ${trimmedReason}`,
-      timestamp: new Date().toISOString(),
+      timestamp,
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast('Shop suspended with mandatory reason recorded.', 'info');
   };
 
   const reinstateShop = async (shopId: string) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Administrator privileges required to reinstate shops.', 'error');
+      return;
+    }
     const targetShop = shops.find((s) => s.id === shopId);
+    const timestamp = new Date().toISOString();
+    const adminEmail = currentUser?.email || 'admin@refero.com.bd';
+
     setShops((prev) =>
       prev.map((s) =>
         s.id === shopId
@@ -1933,20 +2312,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               status: 'approved',
               suspensionReason: undefined,
               rejectionReason: undefined,
-              reviewedAt: new Date().toISOString(),
-              reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+              reviewedAt: timestamp,
+              reviewedBy: adminEmail,
             }
           : s
       )
     );
-    if (isFirebaseConfigured() && db) {
+
+    if (targetShop && currentUser?.id === targetShop.ownerId) {
+      updateCurrentUserProfile({ role: 'shopkeeper', shopId });
+    }
+
+    if (isFirebaseConfigured() && db && targetShop) {
       try {
-        await updateDoc(doc(db, 'shops', shopId), {
-          status: 'approved',
-          suspensionReason: '',
-          rejectionReason: '',
-          reviewedAt: new Date().toISOString(),
-          reviewedBy: currentUser?.email || 'admin@refero.com.bd',
+        const shopRef = doc(db, 'shops', shopId);
+        const userRef = doc(db, 'users', targetShop.ownerId);
+        await runTransaction(db, async (txn) => {
+          txn.update(shopRef, {
+            status: 'approved',
+            suspensionReason: '',
+            rejectionReason: '',
+            reviewedAt: timestamp,
+            reviewedBy: adminEmail,
+          });
+          txn.update(userRef, {
+            role: 'shopkeeper',
+            shopId: shopId,
+            updatedAt: timestamp,
+          });
         });
       } catch (err) {
         console.warn('Firestore reinstateShop error:', err);
@@ -1958,15 +2351,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         title: 'Shop Reinstated!',
         message: `Your shop "${targetShop.name}" has been reinstated and is active again on REFERO.`,
         type: 'system',
+        link: 'shopkeeper_dashboard',
       });
     }
     const log: AuditLog = {
       id: `audit_${Date.now()}`,
       adminId: currentUser?.id || 'admin',
-      adminEmail: currentUser?.email || 'admin@refero.com.bd',
+      adminEmail: adminEmail,
       action: 'SHOP_REINSTATED',
       details: `Reinstated shop ID ${shopId} (${targetShop?.name || 'Unknown'})`,
-      timestamp: new Date().toISOString(),
+      timestamp,
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast('Shop reinstated and published to marketplace.', 'success');
@@ -2022,11 +2416,138 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast('Information request sent to seller.');
   };
 
-  // Process Refund with strict points reversal
+  // Process Refund with strict points reversal and restoration
   const processRefund = async (orderId: string, reason: string): Promise<{ success: boolean; message: string }> => {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return { success: false, message: 'Order not found' };
 
+    // Authorization: Only Admin or Seller responsible for the order
+    const isAdminUser = currentUser?.role === 'admin';
+    const isOrderSeller = currentUser?.role === 'shopkeeper' && currentUser.shopId && (
+      (order as any).shopId === currentUser.shopId ||
+      order.items.some((it) => it.shopId === currentUser.shopId)
+    );
+
+    if (!isAdminUser && !isOrderSeller) {
+      return { success: false, message: 'Unauthorized: Only Admin or Seller can process refunds.' };
+    }
+
+    if (order.orderStatus === 'refunded' || order.paymentStatus === 'refunded') {
+      return { success: false, message: 'This order has already been refunded.' };
+    }
+
+    const activeDb = db;
+    const timestamp = new Date().toISOString();
+
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        const orderRef = doc(activeDb, 'orders', orderId);
+        const customerRef = doc(activeDb, 'users', order.customerId);
+
+        await runTransaction(activeDb, async (transaction) => {
+          const ordSnap = await transaction.get(orderRef);
+          if (!ordSnap.exists()) throw new Error('Order not found on server.');
+          const ordData = ordSnap.data() as Order;
+
+          if (ordData.orderStatus === 'refunded') {
+            throw new Error('Order is already marked refunded.');
+          }
+
+          const custSnap = await transaction.get(customerRef);
+          if (custSnap.exists()) {
+            const custData = custSnap.data();
+            let newBalance = typeof custData.pointsBalance === 'number' ? custData.pointsBalance : 0;
+
+            // 1. If points were credited upon delivery, reverse exact earned amount
+            if (ordData.pointsCredited && ordData.pointsEarned > 0) {
+              if (newBalance < ordData.pointsEarned) {
+                throw new Error(
+                  `Refund point reversal rejected: customer available balance (${newBalance} pts) is lower than the loyalty points earned on this order (${ordData.pointsEarned} pts). Points must be accounted for without silent adjustments.`
+                );
+              }
+              newBalance = newBalance - ordData.pointsEarned;
+
+              const revLedgerRef = doc(collection(activeDb, 'pointTransactions'));
+              transaction.set(revLedgerRef, {
+                id: revLedgerRef.id,
+                userId: ordData.customerId,
+                type: 'refund_reversal',
+                points: -ordData.pointsEarned,
+                relatedId: orderId,
+                description: `Point reversal for refunded order #${ordData.orderNumber} (${reason})`,
+                ruleSnapshot: 'Order refund reversal',
+                status: 'completed',
+                createdAt: timestamp,
+              });
+            }
+
+            // 2. If customer used points to pay/discount during checkout, restore them
+            if (ordData.pointsUsed && ordData.pointsUsed > 0) {
+              newBalance = newBalance + ordData.pointsUsed;
+
+              const restoreLedgerRef = doc(collection(activeDb, 'pointTransactions'));
+              transaction.set(restoreLedgerRef, {
+                id: restoreLedgerRef.id,
+                userId: ordData.customerId,
+                type: 'admin_adjustment',
+                points: ordData.pointsUsed,
+                relatedId: orderId,
+                description: `Restored ${ordData.pointsUsed} points spent on cancelled/refunded order #${ordData.orderNumber}`,
+                ruleSnapshot: 'Cancellation point restore rule',
+                status: 'completed',
+                createdAt: timestamp,
+              });
+            }
+
+            // Update customer balance with lastRefundOrderId reference for rules
+            transaction.update(customerRef, {
+              pointsBalance: newBalance,
+              points: newBalance,
+              lastRefundOrderId: orderId,
+              updatedAt: timestamp,
+            });
+          }
+
+          // 3. Update order document
+          transaction.update(orderRef, {
+            orderStatus: 'refunded',
+            paymentStatus: 'refunded',
+            refundReason: reason,
+            refundedAt: timestamp,
+            refundedBy: currentUser?.email || 'Admin',
+          });
+
+          // 4. Audit log
+          const auditRef = doc(collection(activeDb, 'auditLogs'));
+          transaction.set(auditRef, {
+            id: auditRef.id,
+            adminId: currentUser?.id || 'admin',
+            adminEmail: currentUser?.email || 'admin@refero.com.bd',
+            action: 'ORDER_REFUND_PROCESSED',
+            details: `Processed refund for order #${order.orderNumber}. Reversal: ${order.pointsEarned} pts, Restored: ${order.pointsUsed} pts. Reason: ${reason}`,
+            timestamp,
+          });
+
+          // 5. Notify Customer
+          const notifRef = doc(collection(activeDb, 'notifications'), `notif_refund_${orderId}`);
+          transaction.set(notifRef, {
+            id: `notif_refund_${orderId}`,
+            userId: order.customerId,
+            title: 'Order Refunded',
+            message: `Your order #${order.orderNumber} has been refunded. Points balance updated.`,
+            type: 'order',
+            link: 'orders',
+            read: false,
+            createdAt: timestamp,
+          });
+        });
+      } catch (err: any) {
+        console.error('Process refund transaction error:', err);
+        return { success: false, message: err.message || 'Failed to process refund.' };
+      }
+    }
+
+    // In-memory updates
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -2040,26 +2561,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       )
     );
 
-    if (isFirebaseConfigured() && db) {
-      try {
-        updateDoc(doc(db, 'orders', orderId), {
-          orderStatus: 'refunded',
-          paymentStatus: 'refunded',
-          refundReason: reason,
-        }).catch((err) => console.warn('Firestore processRefund note:', err));
-      } catch (err) {
-        console.warn('Firestore processRefund note:', err);
-      }
-    }
-
-    // If points were earned and credited on this order, REVERSE them
     if (order.pointsCredited && order.pointsEarned > 0) {
       if (currentUser && currentUser.id === order.customerId) {
         updateCurrentUserProfile({
           pointsBalance: Math.max(0, currentUser.pointsBalance - order.pointsEarned),
         });
       }
-
       const reversalTx: PointTransaction = {
         id: `tx_${Date.now()}_rev`,
         userId: order.customerId,
@@ -2067,21 +2574,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         points: -order.pointsEarned,
         relatedId: order.id,
         description: `Reversal of points earned on refunded order #${order.orderNumber} (${reason})`,
-        ruleSnapshot: `Refund point reversal rule`,
+        ruleSnapshot: 'Refund point reversal rule',
         status: 'completed',
-        createdAt: new Date().toISOString(),
+        createdAt: timestamp,
       };
       setPointTransactions((prev) => [reversalTx, ...prev]);
     }
 
-    // If points were spent to discount this order, RESTORE them to the customer
     if (order.pointsUsed > 0) {
       if (currentUser && currentUser.id === order.customerId) {
         updateCurrentUserProfile({
           pointsBalance: currentUser.pointsBalance + order.pointsUsed,
         });
       }
-
       const restoreTx: PointTransaction = {
         id: `tx_${Date.now()}_restore`,
         userId: order.customerId,
@@ -2089,9 +2594,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         points: order.pointsUsed,
         relatedId: order.id,
         description: `Restored ${order.pointsUsed} points spent on cancelled order #${order.orderNumber}`,
-        ruleSnapshot: `Cancellation point restore rule`,
+        ruleSnapshot: 'Cancellation point restore rule',
         status: 'completed',
-        createdAt: new Date().toISOString(),
+        createdAt: timestamp,
       };
       setPointTransactions((prev) => [restoreTx, ...prev]);
     }
@@ -2102,7 +2607,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       adminEmail: currentUser?.email || 'admin@refero.com.bd',
       action: 'ORDER_REFUND_PROCESSED',
       details: `Processed refund for order #${order.orderNumber}. Reversal: ${order.pointsEarned} pts, Restored: ${order.pointsUsed} pts. Reason: ${reason}`,
-      timestamp: new Date().toISOString(),
+      timestamp,
     };
     setAuditLogs((prev) => [log, ...prev]);
 
@@ -2110,9 +2615,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { success: true, message: 'Refund complete and points reversed.' };
   };
 
-  const updateUserRoleAction = (userId: string, newRole: UserRole) => {
+  const updateUserRoleAction = async (userId: string, newRole: UserRole) => {
     if (currentUser && currentUser.id === userId) {
       updateCurrentUserProfile({ role: newRole });
+    }
+    if (isFirebaseConfigured() && db) {
+      try {
+        await updateDoc(doc(db, 'users', userId), {
+          role: newRole,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Firestore updateUserRoleAction error:', err);
+      }
     }
     const log: AuditLog = {
       id: `audit_${Date.now()}`,
@@ -2208,6 +2723,302 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { success: true, message: 'Points adjusted successfully.' };
   };
 
+  // ---------------------------------------------------------------------------
+  // Customer Product Reviews & Ratings (Verified Purchases only)
+  // ---------------------------------------------------------------------------
+  const checkReviewEligibility = (productId: string): { isEligible: boolean; qualifyingOrderId?: string; reason?: string } => {
+    if (!currentUser) {
+      return { isEligible: false, reason: 'Please sign in to write a product review.' };
+    }
+
+    // Find a genuinely completed or delivered order containing this product
+    const deliveredOrder = orders.find(
+      (o) =>
+        o.customerId === currentUser.id &&
+        (o.orderStatus === 'completed' || o.orderStatus === 'delivered') &&
+        o.items.some((it) => it.productId === productId)
+    );
+
+    if (!deliveredOrder) {
+      const pendingOrder = orders.find(
+        (o) =>
+          o.customerId === currentUser.id &&
+          o.orderStatus !== 'cancelled' &&
+          o.orderStatus !== 'refunded' &&
+          o.items.some((it) => it.productId === productId)
+      );
+
+      if (pendingOrder) {
+        return {
+          isEligible: false,
+          reason: `You can review this product after your order #${pendingOrder.orderNumber} is delivered.`,
+        };
+      }
+
+      return {
+        isEligible: false,
+        reason: 'You can review this product after purchasing and receiving delivery.',
+      };
+    }
+
+    // Check if user has already reviewed this product for this order
+    const alreadyReviewed = reviews.some(
+      (r) =>
+        r.productId === productId &&
+        r.customerId === currentUser.id &&
+        r.orderId === deliveredOrder.id
+    );
+
+    if (alreadyReviewed) {
+      return {
+        isEligible: false,
+        qualifyingOrderId: deliveredOrder.id,
+        reason: 'You have already submitted a review for this delivered order.',
+      };
+    }
+
+    return {
+      isEligible: true,
+      qualifyingOrderId: deliveredOrder.id,
+    };
+  };
+
+  const submitProductReview = async (reviewData: {
+    productId: string;
+    rating: number;
+    comment: string;
+    images?: string[];
+  }): Promise<{ success: boolean; message: string }> => {
+    if (!currentUser) {
+      return { success: false, message: 'You must be signed in to submit a review.' };
+    }
+
+    if (reviewData.rating < 1 || reviewData.rating > 5) {
+      return { success: false, message: 'Please select a star rating between 1 and 5.' };
+    }
+
+    if (!reviewData.comment || reviewData.comment.trim().length < 5) {
+      return { success: false, message: 'Please write a meaningful review (at least 5 characters).' };
+    }
+
+    const eligibility = checkReviewEligibility(reviewData.productId);
+    if (!eligibility.isEligible || !eligibility.qualifyingOrderId) {
+      return { success: false, message: eligibility.reason || 'You are not eligible to review this product.' };
+    }
+
+    const targetProduct = products.find((p) => p.id === reviewData.productId);
+    if (!targetProduct) {
+      return { success: false, message: 'Product not found.' };
+    }
+
+    // Deterministic review ID enforced by Firestore rules to strictly prevent duplicate reviews
+    const reviewId = `review_${eligibility.qualifyingOrderId}_${reviewData.productId}`;
+    const nowIso = new Date().toISOString();
+
+    const initialStatus: ProductReview['status'] = currentUser.role === 'admin' ? 'published' : 'pending';
+
+    const newReview: ProductReview = {
+      id: reviewId,
+      productId: reviewData.productId,
+      productTitle: targetProduct.title,
+      shopId: targetProduct.shopId,
+      orderId: eligibility.qualifyingOrderId,
+      customerId: currentUser.id,
+      customerName: currentUser.fullName,
+      customerEmail: currentUser.email,
+      rating: reviewData.rating,
+      comment: reviewData.comment.trim(),
+      images: reviewData.images || [],
+      status: initialStatus,
+      createdAt: nowIso,
+    };
+
+    const activeDb = db;
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        await setDoc(doc(activeDb, 'reviews', reviewId), cleanUndefinedFields(newReview));
+        if (initialStatus === 'published') {
+          const allExistingReviews = reviews.filter((r) => r.productId === reviewData.productId && r.status === 'published');
+          const updatedReviewsList = [...allExistingReviews, newReview];
+          const newRating = Number((updatedReviewsList.reduce((sum, r) => sum + r.rating, 0) / updatedReviewsList.length).toFixed(1));
+          const newCount = updatedReviewsList.length;
+
+          await updateDoc(doc(activeDb, 'products', reviewData.productId), {
+            rating: newRating,
+            reviewCount: newCount,
+            updatedAt: nowIso,
+          }).catch(() => {});
+        }
+      } catch (err: any) {
+        console.error('Firestore submit review error:', err);
+        return { success: false, message: err.message || 'Failed to save review to server.' };
+      }
+    }
+
+    setReviews((prev) => [newReview, ...prev]);
+
+    if (initialStatus === 'published') {
+      const allExistingReviews = reviews.filter((r) => r.productId === reviewData.productId && r.status === 'published');
+      const updatedReviewsList = [...allExistingReviews, newReview];
+      const newRating = Number((updatedReviewsList.reduce((sum, r) => sum + r.rating, 0) / updatedReviewsList.length).toFixed(1));
+      const newCount = updatedReviewsList.length;
+      setProducts((prev) =>
+        prev.map((p) => (p.id === reviewData.productId ? { ...p, rating: newRating, reviewCount: newCount } : p))
+      );
+
+      addNotification({
+        userId: currentUser.id,
+        title: 'Review Published',
+        message: `Your verified purchase review for "${targetProduct.title}" was published!`,
+        type: 'system',
+      });
+
+      showToast('Thank you! Your verified purchase review has been published.', 'success');
+      return { success: true, message: 'Review published successfully.' };
+    } else {
+      addNotification({
+        userId: currentUser.id,
+        title: 'Review Submitted',
+        message: `Your verified purchase review for "${targetProduct.title}" has been submitted for moderation.`,
+        type: 'system',
+      });
+
+      showToast('Thank you! Your review has been submitted for moderation.', 'info');
+      return { success: true, message: 'Review submitted for moderation.' };
+    }
+  };
+
+  const updateProductReview = async (
+    reviewId: string,
+    updates: { rating: number; comment: string; images?: string[] }
+  ): Promise<{ success: boolean; message: string }> => {
+    const existing = reviews.find((r) => r.id === reviewId);
+    if (!existing) return { success: false, message: 'Review not found.' };
+
+    if (!currentUser || (currentUser.id !== existing.customerId && currentUser.role !== 'admin')) {
+      return { success: false, message: 'Unauthorized to edit this review.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const updatedReview: ProductReview = {
+      ...existing,
+      rating: updates.rating,
+      comment: updates.comment.trim(),
+      ...(updates.images ? { images: updates.images } : {}),
+      updatedAt: nowIso,
+    };
+
+    const activeDb = db;
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        await updateDoc(doc(activeDb, 'reviews', reviewId), {
+          rating: updates.rating,
+          comment: updates.comment.trim(),
+          ...(updates.images ? { images: updates.images } : {}),
+          updatedAt: nowIso,
+        });
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Failed to update review.' };
+      }
+    }
+
+    setReviews((prev) => prev.map((r) => (r.id === reviewId ? updatedReview : r)));
+
+    const prodReviews = reviews
+      .map((r) => (r.id === reviewId ? updatedReview : r))
+      .filter((r) => r.productId === existing.productId && r.status === 'published');
+    const newRating = prodReviews.length > 0
+      ? Number((prodReviews.reduce((sum, r) => sum + r.rating, 0) / prodReviews.length).toFixed(1))
+      : 5.0;
+
+    setProducts((prev) =>
+      prev.map((p) => (p.id === existing.productId ? { ...p, rating: newRating } : p))
+    );
+
+    showToast('Your review has been updated.', 'success');
+    return { success: true, message: 'Review updated.' };
+  };
+
+  const deleteProductReview = async (reviewId: string): Promise<{ success: boolean; message: string }> => {
+    const existing = reviews.find((r) => r.id === reviewId);
+    if (!existing) return { success: false, message: 'Review not found.' };
+
+    if (!currentUser || (currentUser.id !== existing.customerId && currentUser.role !== 'admin')) {
+      return { success: false, message: 'Unauthorized to delete this review.' };
+    }
+
+    const activeDb = db;
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        await deleteDoc(doc(activeDb, 'reviews', reviewId));
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Failed to delete review.' };
+      }
+    }
+
+    setReviews((prev) => prev.filter((r) => r.id !== reviewId));
+
+    const remaining = reviews
+      .filter((r) => r.id !== reviewId)
+      .filter((r) => r.productId === existing.productId && r.status === 'published');
+    const newRating = remaining.length > 0
+      ? Number((remaining.reduce((sum, r) => sum + r.rating, 0) / remaining.length).toFixed(1))
+      : 5.0;
+    const newCount = remaining.length;
+
+    setProducts((prev) =>
+      prev.map((p) => (p.id === existing.productId ? { ...p, rating: newRating, reviewCount: newCount } : p))
+    );
+
+    showToast('Review removed.', 'info');
+    return { success: true, message: 'Review removed.' };
+  };
+
+  const moderateProductReview = async (
+    reviewId: string,
+    action: 'published' | 'hidden' | 'flagged',
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return { success: false, message: 'Administrator authorization required.' };
+    }
+
+    const existing = reviews.find((r) => r.id === reviewId);
+    if (!existing) return { success: false, message: 'Review not found.' };
+
+    const activeDb = db;
+    const nowIso = new Date().toISOString();
+
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        await updateDoc(doc(activeDb, 'reviews', reviewId), {
+          status: action,
+          moderationReason: reason || '',
+          updatedAt: nowIso,
+        });
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Failed to moderate review.' };
+      }
+    }
+
+    setReviews((prev) =>
+      prev.map((r) => (r.id === reviewId ? { ...r, status: action, moderationReason: reason, updatedAt: nowIso } : r))
+    );
+
+    const log: AuditLog = {
+      id: `audit_${Date.now()}`,
+      adminId: currentUser.id,
+      adminEmail: currentUser.email,
+      action: `REVIEW_${action.toUpperCase()}`,
+      details: `Admin ${currentUser.email} set review ${reviewId} (Product: ${existing.productTitle}) status to ${action}.${reason ? ` Reason: ${reason}` : ''}`,
+      timestamp: nowIso,
+    };
+    setAuditLogs((prev) => [log, ...prev]);
+
+    showToast(`Review status updated to "${action}".`);
+    return { success: true, message: 'Review moderated.' };
+  };
+
   return (
     <StoreContext.Provider
       value={{
@@ -2236,6 +3047,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         pointsConfig,
         auditLogs,
         notifications,
+        reviews,
         filters,
         customerTab,
         setCustomerTab,
@@ -2255,6 +3067,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setFilter,
         resetFilters,
         createOrder,
+        confirmOrderReceived,
         submitPointTransfer,
         approvePointTransfer,
         rejectPointTransfer,
@@ -2273,6 +3086,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         processRefund,
         updateUserRoleAction,
         adjustUserPoints,
+        checkReviewEligibility,
+        submitProductReview,
+        updateProductReview,
+        deleteProductReview,
+        moderateProductReview,
         addNotification,
         markNotificationAsRead,
         dataSources,

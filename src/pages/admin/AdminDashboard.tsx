@@ -30,6 +30,7 @@ import {
   Clock,
   Database,
   UploadCloud,
+  Bell,
 } from 'lucide-react';
 import { migrateDemoDataToFirestore, MigrationSummary } from '../../services/firebase/migrationService';
 
@@ -42,6 +43,7 @@ export const AdminDashboard: React.FC = () => {
     pointTransactions,
     pointsConfig,
     auditLogs,
+    reviews,
     updatePointsConfig,
     approveShop,
     rejectShop,
@@ -51,15 +53,19 @@ export const AdminDashboard: React.FC = () => {
     processRefund,
     updateUserRoleAction,
     adjustUserPoints,
+    moderateProductReview,
     showToast,
     dataSources,
     navigateTo,
     openAuthModal,
+    notifications,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'users' | 'shops' | 'products' | 'orders' | 'points_config' | 'audit_logs'
+    'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs'
   >('overview');
+
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'pending' | 'published' | 'flagged' | 'hidden'>('all');
 
   // Config Form State
   const [configForm, setConfigForm] = useState({
@@ -132,6 +138,10 @@ export const AdminDashboard: React.FC = () => {
 
   const pendingRefunds = orders.filter((o) => o.orderStatus === 'refund_requested');
   const pendingShops = shops.filter((s) => s.status === 'pending');
+  const sellerAppNotifications = notifications.filter(
+    (n) => n.userId === 'admin' || n.link === 'admin_shops' || n.id.startsWith('notif_seller_app_')
+  );
+  const unreadSellerApps = sellerAppNotifications.filter((n) => !n.read).length;
 
   const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,7 +154,7 @@ export const AdminDashboard: React.FC = () => {
   const [selectedShopForDetails, setSelectedShopForDetails] = useState<Shop | null>(null);
 
   const [activeActionModal, setActiveActionModal] = useState<{
-    type: 'reject' | 'suspend' | 'request_info' | 'reinstate' | 'refund';
+    type: 'reject' | 'suspend' | 'request_info' | 'reinstate' | 'refund' | 'flag_review' | 'hide_review';
     id: string;
     title: string;
     targetName: string;
@@ -156,7 +166,7 @@ export const AdminDashboard: React.FC = () => {
   const [modalError, setModalError] = useState<string | null>(null);
 
   const openActionModal = (
-    type: 'reject' | 'suspend' | 'request_info' | 'reinstate' | 'refund',
+    type: 'reject' | 'suspend' | 'request_info' | 'reinstate' | 'refund' | 'flag_review' | 'hide_review',
     id: string,
     targetName: string,
     title: string,
@@ -197,6 +207,10 @@ export const AdminDashboard: React.FC = () => {
       reinstateShop(id);
     } else if (type === 'refund') {
       await processRefund(id, trimmed);
+    } else if (type === 'flag_review') {
+      moderateProductReview(id, 'flagged', trimmed || 'Inappropriate content / flagged by admin');
+    } else if (type === 'hide_review') {
+      moderateProductReview(id, 'hidden', trimmed);
     }
 
     setActiveActionModal(null);
@@ -384,6 +398,43 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Seller Application Alert Notification Banner */}
+      {(unreadSellerApps > 0 || pendingShops.length > 0) && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-700 flex items-center justify-center shrink-0">
+              <Bell className="w-5 h-5 text-amber-700 animate-pulse" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-950 flex items-center gap-2">
+                <span>Seller Storefront Application Alert</span>
+                <span className="px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold font-mono">
+                  {pendingShops.length} Pending Approval
+                </span>
+                {unreadSellerApps > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-[#142B4A] text-white text-[9px] font-bold">
+                    {unreadSellerApps} Unread Notice
+                  </span>
+                )}
+              </h4>
+              <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                Customer accounts have applied for seller status. Review trade license, warehouse address, and contact details to approve or reject.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setActiveTab('shops');
+              setShopFilter('pending');
+            }}
+            className="px-3.5 py-2 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0 shadow-xs flex items-center gap-1.5"
+          >
+            <span>Review Applications</span>
+            <span>&rarr;</span>
+          </button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex border-b border-slate-200 gap-4 sm:gap-6 text-xs font-semibold overflow-x-auto">
         <button
@@ -418,13 +469,18 @@ export const AdminDashboard: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('shops')}
-          className={`pb-3 whitespace-nowrap cursor-pointer ${
+          className={`pb-3 whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
             activeTab === 'shops'
               ? 'text-[#142B4A] border-b-2 border-[#142B4A]'
               : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          Shops & Approvals ({pendingShops.length} pending)
+          <span>Shops & Approvals</span>
+          {pendingShops.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold">
+              {pendingShops.length} pending
+            </span>
+          )}
         </button>
         <button
           onClick={() => setActiveTab('orders')}
@@ -445,6 +501,16 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           Products ({products.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('reviews')}
+          className={`pb-3 whitespace-nowrap cursor-pointer ${
+            activeTab === 'reviews'
+              ? 'text-[#142B4A] border-b-2 border-[#142B4A]'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          Review Moderation ({reviews.length})
         </button>
         <button
           onClick={() => setActiveTab('audit_logs')}
@@ -1232,6 +1298,143 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB: REVIEW MODERATION (SECTION 5 & 10) */}
+      {activeTab === 'reviews' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-bold text-[#142B4A]">Customer Product Reviews Moderation</h3>
+              <p className="text-slate-500 text-[11px] mt-0.5">
+                Review and moderate verified customer feedback. Inappropriate or abusive reviews can be flagged or hidden with an auditable reason.
+              </p>
+            </div>
+            {/* Filter buttons */}
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-lg">
+              {(['all', 'pending', 'published', 'flagged', 'hidden'] as const).map((filter) => (
+                <button
+                  key={filter}
+                  onClick={() => setReviewFilter(filter)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold capitalize transition-colors cursor-pointer ${
+                    reviewFilter === filter
+                      ? 'bg-white text-[#142B4A] shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {reviews
+              .filter((r) => reviewFilter === 'all' || r.status === reviewFilter)
+              .map((r) => (
+                <div key={r.id} className="py-3.5 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{r.customerName}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">({r.customerEmail || 'Verified Buyer'})</span>
+                        <span
+                          className={`text-[10px] uppercase font-bold px-1.5 py-0.2 rounded border ${
+                            r.status === 'published'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : r.status === 'pending'
+                              ? 'bg-blue-50 text-blue-800 border-blue-200'
+                              : r.status === 'flagged'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}
+                        >
+                          {r.status}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Product: <strong className="text-slate-700">{r.productTitle}</strong> · Order: <span className="font-mono">{r.orderId}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-1 text-amber-500 shrink-0">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <span key={i} className={i < r.rating ? 'text-amber-400' : 'text-slate-200'}>
+                          ★
+                        </span>
+                      ))}
+                      <span className="text-xs font-mono font-bold text-slate-700 ml-1">
+                        {r.rating}/5
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="p-2.5 bg-slate-50 rounded-lg text-slate-700 text-xs border border-slate-200/80">
+                    "{r.comment}"
+                  </p>
+
+                  {r.moderationReason && (
+                    <div className="text-[11px] text-amber-900 bg-amber-50 px-2.5 py-1 rounded border border-amber-200">
+                      <strong>Moderation Note:</strong> {r.moderationReason}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Submitted: {formatDateTime(r.createdAt)}
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      {r.status !== 'published' && (
+                        <button
+                          onClick={() => moderateProductReview(r.id, 'published', 'Approved by administrator')}
+                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold cursor-pointer"
+                        >
+                          Publish / Restore
+                        </button>
+                      )}
+                      {r.status !== 'flagged' && (
+                        <button
+                          onClick={() => {
+                            openActionModal(
+                              'flag_review',
+                              r.id,
+                              `Review by ${r.customerName}`,
+                              'Flag Review as Inappropriate',
+                              'Flag this customer review for policy violation or inappropriate content.',
+                              false,
+                              'Reason for flagging (optional)...'
+                            );
+                          }}
+                          className="px-2.5 py-1 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded text-[11px] font-semibold cursor-pointer"
+                        >
+                          Flag Inappropriate
+                        </button>
+                      )}
+                      {r.status !== 'hidden' && (
+                        <button
+                          onClick={() => {
+                            openActionModal(
+                              'hide_review',
+                              r.id,
+                              `Review by ${r.customerName}`,
+                              'Hide Review from Public Catalog',
+                              'Hiding this review will immediately prevent buyers from seeing it on the product page. A valid reason is required for the audit trail.',
+                              true,
+                              'Mandatory reason for hiding review...'
+                            );
+                          }}
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded text-[11px] font-semibold cursor-pointer"
+                        >
+                          Hide Review
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
           </div>
         </div>
       )}

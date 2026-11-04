@@ -21,6 +21,8 @@ import {
   Bell,
   Eye,
   RotateCcw,
+  Clock,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
@@ -37,6 +39,7 @@ export const Navbar: React.FC = () => {
   const {
     currentView,
     navigateTo,
+    shops,
     cart,
     wishlist,
     openCartDrawer,
@@ -59,9 +62,19 @@ export const Navbar: React.FC = () => {
 
   // Strictly isolate user notifications - never expose previous account or admin notifications to guests
   const userNotifications = currentUser
-    ? notifications.filter((n) => n.userId === currentUser.id || (!n.userId && currentUser.role === 'admin'))
+    ? notifications.filter(
+        (n) => n.userId === currentUser.id || (currentUser.role === 'admin' && (n.userId === 'admin' || !n.userId))
+      )
     : [];
   const unreadCount = userNotifications.filter((n) => !n.read).length;
+
+  // Determine user's storefront / application status
+  const userShop = currentUser
+    ? shops.find((s) => s.ownerId === currentUser.id || (currentUser.shopId && s.id === currentUser.shopId))
+    : null;
+  const isShopkeeper = currentUser?.role === 'shopkeeper' || userShop?.status === 'approved';
+  const isPendingSeller = !isShopkeeper && userShop?.status === 'pending';
+  const isRejectedSeller = !isShopkeeper && userShop?.status === 'rejected';
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -332,7 +345,16 @@ export const Navbar: React.FC = () => {
                           key={notif.id}
                           onClick={() => {
                             markNotificationAsRead(notif.id);
-                            if (notif.link === 'transfers' || notif.type === 'transfer') {
+                            if (notif.link === 'admin_shops' || notif.link === 'shops') {
+                              navigateTo('admin_dashboard');
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'shopkeeper_dashboard') {
+                              navigateTo('shopkeeper_dashboard');
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'apply_seller') {
+                              openSellerModal();
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'transfers' || notif.type === 'transfer') {
                               navigateTo('customer_dashboard', { customerTab: 'transfers' });
                               setIsNotificationsOpen(false);
                             } else if (notif.link === 'referrals') {
@@ -412,8 +434,14 @@ export const Navbar: React.FC = () => {
                       <div className="px-3 py-2 border-b border-slate-100">
                         <p className="font-semibold text-slate-900 truncate">{currentUser.fullName}</p>
                         <p className="text-[11px] text-slate-500 truncate">{currentUser.email}</p>
-                        <span className="inline-block mt-1 px-1.5 py-0.5 text-[10px] font-semibold uppercase bg-slate-100 text-slate-600 rounded">
-                          {currentUser.role}
+                        <span className={`inline-block mt-1 px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded ${
+                          currentUser.role === 'admin'
+                            ? 'bg-purple-100 text-purple-700'
+                            : isShopkeeper
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {currentUser.role === 'admin' ? 'Admin' : isShopkeeper ? 'Shopkeeper' : 'Customer'}
                         </span>
                       </div>
 
@@ -430,20 +458,52 @@ export const Navbar: React.FC = () => {
                         </button>
                       )}
 
-                      {currentUser.role === 'shopkeeper' && (
+                      {isShopkeeper && (
                         <button
                           onClick={() => {
                             setIsUserMenuOpen(false);
                             navigateTo('shopkeeper_dashboard');
                           }}
-                          className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-50 text-slate-700"
+                          className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-50 text-slate-700 font-medium"
                         >
                           <Store className="w-4 h-4 text-[#142B4A]" />
                           <span>Shopkeeper Portal</span>
                         </button>
                       )}
 
-                      {currentUser.role !== 'shopkeeper' && (
+                      {isPendingSeller && (
+                        <div
+                          className="px-3 py-2 bg-amber-50 border-y border-amber-100 flex items-center justify-between text-[11px] text-amber-800"
+                          title="Your storefront application is being reviewed by the marketplace administrator."
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                            <span className="font-semibold">Application Pending</span>
+                          </div>
+                          <span className="text-[9px] bg-amber-200/80 px-1.5 py-0.5 rounded font-bold uppercase">
+                            In Review
+                          </span>
+                        </div>
+                      )}
+
+                      {isRejectedSeller && (
+                        <button
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            openSellerModal();
+                          }}
+                          className="w-full text-left px-3 py-2 flex items-center justify-between bg-rose-50 hover:bg-rose-100 text-rose-800 transition-colors text-[11px]"
+                          title="Click to view details and resubmit your application."
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                            <span className="font-semibold">Application Rejected</span>
+                          </div>
+                          <span className="font-bold underline text-[10px]">Reapply</span>
+                        </button>
+                      )}
+
+                      {!isShopkeeper && !isPendingSeller && !isRejectedSeller && (
                         <button
                           onClick={() => {
                             setIsUserMenuOpen(false);
@@ -709,15 +769,69 @@ export const Navbar: React.FC = () => {
             )}
           </button>
           {currentUser && (
-            <button
-              onClick={() => {
-                navigateTo('customer_dashboard');
-                setIsMobileMenuOpen(false);
-              }}
-              className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
-            >
-              Customer Dashboard & Points
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  navigateTo('customer_dashboard');
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full text-left py-1.5 text-slate-700 font-medium cursor-pointer"
+              >
+                Customer Dashboard & Points
+              </button>
+
+              {isShopkeeper && (
+                <button
+                  onClick={() => {
+                    navigateTo('shopkeeper_dashboard');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full text-left py-1.5 text-[#142B4A] font-bold cursor-pointer flex items-center gap-1.5"
+                >
+                  <Store className="w-4 h-4 text-[#142B4A]" />
+                  <span>Shopkeeper Portal</span>
+                </button>
+              )}
+
+              {isPendingSeller && (
+                <div className="py-1.5 px-2 bg-amber-50 border border-amber-200 rounded text-amber-800 text-[11px] flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                    <span className="font-semibold">Application Pending Review</span>
+                  </div>
+                  <span className="text-[9px] bg-amber-200/80 px-1 py-0.5 rounded font-bold uppercase">In Review</span>
+                </div>
+              )}
+
+              {isRejectedSeller && (
+                <button
+                  onClick={() => {
+                    openSellerModal();
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full text-left py-1.5 px-2 bg-rose-50 border border-rose-200 rounded text-rose-800 text-[11px] flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                    <span className="font-semibold">Application Rejected</span>
+                  </div>
+                  <span className="text-[10px] font-bold text-rose-700 underline">Reapply</span>
+                </button>
+              )}
+
+              {!isShopkeeper && !isPendingSeller && !isRejectedSeller && (
+                <button
+                  onClick={() => {
+                    openSellerModal();
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="w-full text-left py-1.5 text-[#F47B44] font-semibold cursor-pointer flex items-center gap-1.5"
+                >
+                  <Store className="w-4 h-4" />
+                  <span>Apply as Seller</span>
+                </button>
+              )}
+            </>
           )}
           {isRealAdmin && (
             <button

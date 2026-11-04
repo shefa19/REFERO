@@ -15,11 +15,12 @@ import {
 } from 'lucide-react';
 
 export const OrderTrackingPage: React.FC = () => {
-  const { selectedOrderId, orders, navigateTo, processRefund, showToast } = useStore();
+  const { selectedOrderId, orders, navigateTo, processRefund, confirmOrderReceived, showToast } = useStore();
   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
   const [refundReason, setRefundReason] = useState('');
   const [refundError, setRefundError] = useState('');
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [isConfirmingDelivery, setIsConfirmingDelivery] = useState(false);
 
   const order = orders.find((o) => o.id === selectedOrderId) || orders[0];
 
@@ -42,7 +43,8 @@ export const OrderTrackingPage: React.FC = () => {
     { key: 'confirmed', label: 'Confirmed', desc: 'Shopkeeper accepted' },
     { key: 'processing', label: 'Processing', desc: 'Packaging with seal' },
     { key: 'shipped', label: 'Dispatched', desc: 'With courier partner' },
-    { key: 'delivered', label: 'Delivered', desc: 'Points awarded' },
+    { key: 'delivered', label: 'Delivered', desc: 'Arrived at your door' },
+    { key: 'completed', label: 'Completed', desc: 'Receipt confirmed' },
   ];
 
   const currentStepIndex = steps.findIndex((s) => s.key === order.orderStatus);
@@ -169,21 +171,54 @@ export const OrderTrackingPage: React.FC = () => {
             <Sparkles className="w-5 h-5 text-[#F47B44] shrink-0 mt-0.5" />
             <div>
               <span className="font-bold text-[#142B4A] block">
-                REFERO Points Award: +{formatPoints(order.pointsEarned)} Points
+                REFERO Points Loyalty Reward: +{formatPoints(order.pointsEarned)} Points
               </span>
               <p className="text-slate-600 mt-0.5">
-                {order.pointsCredited
-                  ? 'Points have been authoritatively credited to your account ledger.'
-                  : 'Points are pending and will be automatically credited to your balance once the order reaches "Delivered" status.'}
+                {order.pointsCredited || order.orderStatus === 'completed'
+                  ? 'Points have been credited to your official REFERO account ledger.'
+                  : order.orderStatus === 'delivered'
+                  ? 'Your package has arrived! Click "Confirm Received" below to complete the order and credit your points.'
+                  : 'Points are pending fulfillment and will be ready to claim once the package is delivered.'}
               </p>
             </div>
           </div>
-          <button
-            onClick={() => navigateTo('customer_dashboard')}
-            className="self-start sm:self-auto px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] transition-colors whitespace-nowrap cursor-pointer"
-          >
-            View Points Ledger
-          </button>
+          
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {order.orderStatus === 'delivered' && !order.pointsCredited && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsConfirmingDelivery(true);
+                  try {
+                    await confirmOrderReceived(order.id);
+                  } finally {
+                    setIsConfirmingDelivery(false);
+                  }
+                }}
+                disabled={isConfirmingDelivery}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isConfirmingDelivery ? (
+                  <>
+                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Confirming...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirm Received</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <button
+              onClick={() => navigateTo('customer_dashboard')}
+              className="px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] transition-colors whitespace-nowrap cursor-pointer"
+            >
+              View Points Ledger
+            </button>
+          </div>
         </div>
 
         {/* Items List & Delivery Address Details */}

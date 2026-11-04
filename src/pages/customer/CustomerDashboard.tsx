@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT, formatPoints, formatDate, formatDateTime } from '../../utils/formatters';
+import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
 import {
   User,
   Sparkles,
@@ -19,6 +20,8 @@ import {
   X,
   ExternalLink,
   ShieldCheck,
+  Store,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const CustomerDashboard: React.FC = () => {
@@ -37,8 +40,11 @@ export const CustomerDashboard: React.FC = () => {
     submitPointTransfer,
     approvePointTransfer,
     rejectPointTransfer,
+    confirmOrderReceived,
     showToast,
     pointsConfig,
+    shops,
+    openSellerModal,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
@@ -52,6 +58,7 @@ export const CustomerDashboard: React.FC = () => {
   }, [customerTab]);
 
   const [processingTransfers, setProcessingTransfers] = useState<Record<string, boolean>>({});
+  const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
 
   const handleAcceptTransfer = async (reqId: string) => {
     if (processingTransfers[reqId]) return;
@@ -139,6 +146,13 @@ export const CustomerDashboard: React.FC = () => {
   const outgoingTransfers = transferRequests.filter((t) => t.senderId === currentUser.id);
   const myReferrals = referrals.filter((r) => r.referrerUserId === currentUser.id);
   const wishlistedProducts = products.filter((p) => wishlist.includes(p.id));
+
+  const userShop = shops.find(
+    (s) => s.ownerId === currentUser.id || (currentUser.shopId && s.id === currentUser.shopId)
+  );
+  const isShopkeeper = currentUser.role === 'shopkeeper' || userShop?.status === 'approved';
+  const isPendingSeller = !isShopkeeper && userShop?.status === 'pending';
+  const isRejectedSeller = !isShopkeeper && userShop?.status === 'rejected';
 
   const handleCopyReferral = () => {
     navigator.clipboard.writeText(currentUser.referralCode);
@@ -301,6 +315,100 @@ export const CustomerDashboard: React.FC = () => {
             </div>
           </div>
 
+          {/* Seller / Storefront Status Banner */}
+          {isShopkeeper ? (
+            <div className="bg-gradient-to-r from-[#142B4A] to-[#1E3A5F] text-white p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
+                  <Store className="w-5 h-5 text-[#F47B44]" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold flex items-center gap-2">
+                    <span>Approved Marketplace Seller</span>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                      Active
+                    </span>
+                  </h4>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Your store {userShop ? `"${userShop.name}"` : ''} is live. Manage your inventory, orders, and policies in your Shopkeeper Portal.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => navigateTo('shopkeeper_dashboard')}
+                className="px-4 py-2 bg-[#F47B44] hover:bg-[#E06A33] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0 shadow-xs flex items-center gap-1.5"
+              >
+                <span>Shopkeeper Portal</span>
+                <span>&rarr;</span>
+              </button>
+            </div>
+          ) : isPendingSeller ? (
+            <div className="bg-amber-50 border border-amber-300 p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-200/60 flex items-center justify-center shrink-0">
+                  <Clock className="w-5 h-5 text-amber-700 animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+                    <span>Seller Storefront Application Under Review</span>
+                    <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-800 text-[10px] font-bold">
+                      In Review
+                    </span>
+                  </h4>
+                  <p className="text-xs text-amber-800/90 mt-0.5">
+                    Your application for "{userShop?.name || 'Your Store'}" has been submitted to marketplace administration. You will be notified immediately upon approval.
+                  </p>
+                </div>
+              </div>
+              <div className="text-xs font-semibold text-amber-700 bg-amber-100/80 px-3 py-1.5 rounded-lg shrink-0">
+                Awaiting Admin Verification
+              </div>
+            </div>
+          ) : isRejectedSeller ? (
+            <div className="bg-rose-50 border border-rose-300 p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-rose-200/60 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-700" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-rose-900">
+                    Seller Application Status: Additional Information Required
+                  </h4>
+                  <p className="text-xs text-rose-800/90 mt-0.5">
+                    Reason provided: <strong className="font-medium">{userShop?.rejectionReason || 'Application requirements not met.'}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={openSellerModal}
+                className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0 shadow-xs"
+              >
+                Review & Reapply
+              </button>
+            </div>
+          ) : (
+            <div className="bg-gradient-to-r from-slate-50 to-orange-50/40 border border-slate-200 p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-[#142B4A]/10 flex items-center justify-center shrink-0">
+                  <Store className="w-5 h-5 text-[#142B4A]" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-[#142B4A]">Sell on REFERO Marketplace</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Open your digital storefront, upload groceries and products, and start earning across Dhaka.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={openSellerModal}
+                className="px-4 py-2 bg-[#F47B44] hover:bg-[#E06A33] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0 shadow-xs flex items-center gap-1.5"
+              >
+                <span>Apply as Seller</span>
+                <span>&rarr;</span>
+              </button>
+            </div>
+          )}
+
           {/* Recent Orders Strip */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -397,21 +505,60 @@ export const CustomerDashboard: React.FC = () => {
                   ))}
                 </div>
 
-                <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs">
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-100 text-xs gap-2">
                   <div className="flex items-center gap-1.5 text-slate-500">
                     <Sparkles className="w-3.5 h-3.5 text-[#F47B44]" />
                     <span>
                       Earned: <strong>+{ord.pointsEarned} pts</strong> (
-                      {ord.pointsCredited ? 'Credited' : 'Pending Delivery'})
+                      {ord.pointsCredited ? 'Credited' : ord.orderStatus === 'delivered' ? 'Ready to Claim' : 'Pending Delivery'})
                     </span>
                   </div>
-                  <button
-                    onClick={() => navigateTo('order_tracking', { orderId: ord.id })}
-                    className="text-[#142B4A] hover:underline font-semibold flex items-center gap-1"
-                  >
-                    <span>View Tracking & Receipt</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Simplified Customer Confirmation: Click Confirm Received to claim loyalty points */}
+                    {ord.orderStatus === 'delivered' && !ord.pointsCredited && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setConfirmingOrderId(ord.id);
+                          try {
+                            await confirmOrderReceived(ord.id);
+                          } finally {
+                            setConfirmingOrderId(null);
+                          }
+                        }}
+                        disabled={confirmingOrderId === ord.id}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+                      >
+                        {confirmingOrderId === ord.id ? (
+                          <>
+                            <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>Claiming...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Confirm Received (+{ord.pointsEarned} pts)</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {ord.orderStatus === 'completed' && (
+                      <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md text-[11px] font-semibold flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-600" />
+                        <span>Completed & Points Credited</span>
+                      </span>
+                    )}
+
+                    <button
+                      onClick={() => navigateTo('order_tracking', { orderId: ord.id })}
+                      className="text-[#142B4A] hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <span>View Tracking & Receipt</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
@@ -633,7 +780,7 @@ export const CustomerDashboard: React.FC = () => {
               ) : (
                 <div className="divide-y divide-slate-100 text-xs">
                   {incomingTransfers.map((req) => (
-                    <div key={req.id} className="py-3 flex items-center justify-between gap-3">
+                    <div key={req.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div>
                         <p className="font-bold text-slate-800">
                           {req.senderName} ({req.senderEmail})
@@ -644,12 +791,12 @@ export const CustomerDashboard: React.FC = () => {
                       </div>
 
                       {req.status === 'pending' ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 self-start sm:self-auto">
                           <button
                             type="button"
                             onClick={() => handleAcceptTransfer(req.id)}
                             disabled={Boolean(processingTransfers[req.id])}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5"
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5"
                           >
                             {processingTransfers[req.id] ? (
                               <span className="flex items-center gap-1.5">
@@ -664,14 +811,14 @@ export const CustomerDashboard: React.FC = () => {
                             type="button"
                             onClick={() => handleDeclineTransfer(req.id)}
                             disabled={Boolean(processingTransfers[req.id])}
-                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
                           >
                             <span>Decline</span>
                           </button>
                         </div>
                       ) : (
                         <span
-                          className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded ${
+                          className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded self-start sm:self-auto ${
                             req.status === 'accepted' || req.status === 'approved'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : req.status === 'rejected'
@@ -696,14 +843,14 @@ export const CustomerDashboard: React.FC = () => {
               ) : (
                 <div className="divide-y divide-slate-100 text-xs">
                   {outgoingTransfers.map((req) => (
-                    <div key={req.id} className="py-2.5 flex items-center justify-between">
+                    <div key={req.id} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                       <div>
                         <span className="font-medium text-slate-800">To: {req.recipientEmail}</span>
                         <span className="text-slate-400 text-[11px] ml-2 font-mono">
                           {formatDate(req.createdAt)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 font-mono">
+                      <div className="flex items-center gap-2 font-mono self-start sm:self-auto">
                         <span className="font-bold text-[#142B4A]">{req.points} pts</span>
                         <span className="px-2 py-0.5 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-600">
                           {req.status}

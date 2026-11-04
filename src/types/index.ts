@@ -48,6 +48,8 @@ export interface Shop {
   customerSupportPhone?: string;
   customerSupportEmail?: string;
   customerSupportHours?: string;
+  totalSales?: number;
+  commissionRate?: number;
   emailNotificationEnabled?: boolean;
   orderSmsNotificationEnabled?: boolean;
   createdAt: string;
@@ -96,7 +98,9 @@ export type OrderStatus =
   | 'confirmed'
   | 'processing'
   | 'shipped'
+  | 'out_for_delivery'
   | 'delivered'
+  | 'completed'
   | 'cancelled'
   | 'refund_requested'
   | 'refunded';
@@ -137,8 +141,12 @@ export interface Order {
   referralRewardCredited: boolean;
   createdAt: string;
   deliveredAt?: string;
+  completedAt?: string;
   cancelReason?: string;
   refundReason?: string;
+  productIds?: string[];
+  shopIds?: string[];
+  confirmedBy?: 'customer' | 'admin';
 }
 
 export type PointTransactionType =
@@ -228,3 +236,22 @@ export interface CartItem {
   product: Product;
   quantity: number;
 }
+
+export interface ProductReview {
+  id: string;
+  productId: string;
+  productTitle: string;
+  shopId: string;
+  orderId: string; // The qualifying delivered order
+  customerId: string;
+  customerName: string;
+  customerEmail?: string;
+  rating: number; // 1 to 5
+  comment: string;
+  images?: string[];
+  status: 'pending' | 'published' | 'hidden' | 'flagged';
+  moderationReason?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
