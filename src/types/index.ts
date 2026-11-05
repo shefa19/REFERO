@@ -9,6 +9,7 @@ export interface UserProfile {
   referralCode: string;
   referredBy?: string;
   pointsBalance: number;
+  points?: number;
   pendingPoints: number;
   avatarUrl?: string;
   status: 'active' | 'suspended';
@@ -184,6 +185,7 @@ export interface PointTransferRequest {
   status: 'pending' | 'approved' | 'accepted' | 'rejected' | 'cancelled';
   createdAt: string;
   processedAt?: string;
+  requestType?: 'transfer' | 'request';
 }
 
 export interface ReferralRecord {
@@ -223,6 +225,7 @@ export interface AuditLog {
 export interface NotificationItem {
   id: string;
   userId: string;
+  recipientEmail?: string;
   title: string;
   message: string;
   type: 'order' | 'points' | 'transfer' | 'system';
@@ -251,6 +254,7 @@ export interface ProductReview {
   images?: string[];
   status: 'pending' | 'published' | 'hidden' | 'flagged';
   moderationReason?: string;
+  isDemo?: boolean;
   createdAt: string;
   updatedAt?: string;
 }

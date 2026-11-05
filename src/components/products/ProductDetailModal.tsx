@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatBDT, formatPoints, formatDate } from '../../utils/formatters';
 import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
+import { storage } from '../../services/firebase/config';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   X,
   Star,
@@ -22,6 +24,8 @@ import {
   MessageSquare,
   AlertCircle,
   Image as ImageIcon,
+  Camera,
+  Upload,
 } from 'lucide-react';
 
 export const ProductDetailModal: React.FC = () => {
@@ -47,11 +51,15 @@ export const ProductDetailModal: React.FC = () => {
   const [quantity, setQuantity] = useState(1);
   const [activeTab, setActiveTab] = useState<'details' | 'reviews' | 'delivery'>('details');
 
-  // Review Form State
+  // Review Form State & Photo Upload
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [reviewRating, setReviewRating] = useState<number>(5);
   const [reviewComment, setReviewComment] = useState('');
   const [reviewImageUrl, setReviewImageUrl] = useState('');
+  const [selectedReviewFile, setSelectedReviewFile] = useState<File | null>(null);
+  const [reviewImagePreview, setReviewImagePreview] = useState<string | null>(null);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
 
   if (currentView !== 'product_detail' || !selectedProductId) return null;
@@ -71,6 +79,10 @@ export const ProductDetailModal: React.FC = () => {
     (r) => r.productId === product.id && (r.status === 'published' || (currentUser && r.customerId === currentUser.id))
   );
 
+  const calculatedRating = productReviews.length > 0
+    ? productReviews.reduce((sum, r) => sum + r.rating, 0) / productReviews.length
+    : product.rating;
+
   const eligibility = checkReviewEligibility(product.id);
   const myExistingReview = currentUser
     ? productReviews.find((r) => r.customerId === currentUser.id)
@@ -85,6 +97,38 @@ export const ProductDetailModal: React.FC = () => {
     navigateTo('checkout');
   };
 
+  const handleReviewFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
+      showToast('Please select a valid image file (JPEG, PNG, or WebP).', 'error');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Image file size must be 5MB or smaller.', 'error');
+      return;
+    }
+
+    setSelectedReviewFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setReviewImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveReviewPhoto = () => {
+    setSelectedReviewFile(null);
+    setReviewImagePreview(null);
+    setReviewImageUrl('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleReviewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reviewComment.trim()) {
@@ -93,31 +137,60 @@ export const ProductDetailModal: React.FC = () => {
     }
     setIsSubmittingReview(true);
     try {
+      let finalImageUrl = reviewImageUrl.trim();
+
+      // If a file was selected, upload to Firebase Storage or use DataURL fallback
+      if (selectedReviewFile && currentUser) {
+        setIsUploadingImage(true);
+        if (storage) {
+          try {
+            const ext = selectedReviewFile.name.split('.').pop() || 'jpg';
+            const cleanFileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+            const fileRef = ref(storage, `reviews/${currentUser.id}/${cleanFileName}`);
+            await uploadBytes(fileRef, selectedReviewFile);
+            finalImageUrl = await getDownloadURL(fileRef);
+          } catch (storageErr) {
+            console.warn('Firebase Storage upload error, falling back to embedded preview:', storageErr);
+            if (reviewImagePreview) {
+              finalImageUrl = reviewImagePreview;
+            }
+          }
+        } else if (reviewImagePreview) {
+          finalImageUrl = reviewImagePreview;
+        }
+        setIsUploadingImage(false);
+      } else if (!finalImageUrl && reviewImagePreview) {
+        finalImageUrl = reviewImagePreview;
+      }
+
+      const reviewPayloadImages = finalImageUrl ? [finalImageUrl] : [];
+
       if (editingReviewId) {
         const res = await updateProductReview(editingReviewId, {
           rating: reviewRating,
           comment: reviewComment,
-          images: reviewImageUrl.trim() ? [reviewImageUrl.trim()] : [],
+          images: reviewPayloadImages,
         });
         if (res.success) {
           setEditingReviewId(null);
           setReviewComment('');
-          setReviewImageUrl('');
+          handleRemoveReviewPhoto();
         }
       } else {
         const res = await submitProductReview({
           productId: product.id,
           rating: reviewRating,
           comment: reviewComment,
-          images: reviewImageUrl.trim() ? [reviewImageUrl.trim()] : [],
+          images: reviewPayloadImages,
         });
         if (res.success) {
           setReviewComment('');
-          setReviewImageUrl('');
+          handleRemoveReviewPhoto();
         }
       }
     } finally {
       setIsSubmittingReview(false);
+      setIsUploadingImage(false);
     }
   };
 
@@ -126,14 +199,17 @@ export const ProductDetailModal: React.FC = () => {
     setEditingReviewId(r.id);
     setReviewRating(r.rating);
     setReviewComment(r.comment);
-    setReviewImageUrl(r.images?.[0] || '');
+    const existingImg = r.images?.[0] || '';
+    setReviewImageUrl(existingImg);
+    setReviewImagePreview(existingImg || null);
+    setSelectedReviewFile(null);
   };
 
   const handleCancelEdit = () => {
     setEditingReviewId(null);
     setReviewRating(5);
     setReviewComment('');
-    setReviewImageUrl('');
+    handleRemoveReviewPhoto();
   };
 
   const handleDeleteReview = async (reviewId: string) => {
@@ -253,15 +329,15 @@ export const ProductDetailModal: React.FC = () => {
                   <div className="flex items-center text-amber-500">
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                     <span className="ml-1 font-bold text-slate-800 font-mono">
-                      {product.rating.toFixed(1)}
+                      {calculatedRating.toFixed(1)}
                     </span>
                   </div>
                   <span>·</span>
                   <button
                     onClick={() => setActiveTab('reviews')}
-                    className="hover:underline text-slate-600 font-medium cursor-pointer"
+                    className="hover:underline text-slate-600 font-semibold cursor-pointer text-[#142B4A]"
                   >
-                    {productReviews.length} verified review{productReviews.length !== 1 ? 's' : ''}
+                    {productReviews.length} customer review{productReviews.length !== 1 ? 's' : ''}
                   </button>
                   <span>·</span>
                   <span className="text-slate-700 font-medium">Pack size: {product.unit}</span>
@@ -516,26 +592,80 @@ export const ProductDetailModal: React.FC = () => {
 
                               <div>
                                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                                  Review Photo URL (Optional):
+                                  Attach Product Photo (Optional, JPEG/PNG/WebP &le; 5MB):
                                 </label>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="url"
-                                    value={reviewImageUrl}
-                                    onChange={(e) => setReviewImageUrl(e.target.value)}
-                                    placeholder="https://..."
-                                    className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-hidden"
-                                  />
-                                </div>
+
+                                <input
+                                  type="file"
+                                  ref={fileInputRef}
+                                  onChange={handleReviewFileChange}
+                                  accept="image/jpeg,image/png,image/webp"
+                                  className="hidden"
+                                />
+
+                                {reviewImagePreview ? (
+                                  <div className="flex items-center gap-3 p-2 bg-white rounded-lg border border-slate-200">
+                                    <img
+                                      src={reviewImagePreview}
+                                      alt="Selected review attachment"
+                                      className="w-12 h-12 rounded-md object-cover border border-slate-200"
+                                    />
+                                    <div className="flex-1 min-w-0 text-xs">
+                                      <p className="font-semibold text-slate-800 truncate">
+                                        {selectedReviewFile ? selectedReviewFile.name : 'Attached photo'}
+                                      </p>
+                                      <p className="text-[10px] text-emerald-700 font-medium">Ready to upload to Firebase Storage</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={handleRemoveReviewPhoto}
+                                      className="px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded text-xs font-semibold cursor-pointer transition-colors"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => fileInputRef.current?.click()}
+                                      className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                                    >
+                                      <Camera className="w-3.5 h-3.5 text-[#F47B44]" />
+                                      <span>Choose Photo File</span>
+                                    </button>
+                                    <span className="text-[11px] text-slate-400">or paste URL:</span>
+                                    <input
+                                      type="url"
+                                      value={reviewImageUrl}
+                                      onChange={(e) => {
+                                        setReviewImageUrl(e.target.value);
+                                        if (e.target.value.trim()) {
+                                          setReviewImagePreview(e.target.value.trim());
+                                        }
+                                      }}
+                                      placeholder="https://..."
+                                      className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-hidden"
+                                    />
+                                  </div>
+                                )}
                               </div>
 
                               <button
                                 type="submit"
-                                disabled={isSubmittingReview}
+                                disabled={isSubmittingReview || isUploadingImage}
                                 className="px-4 py-2 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                               >
                                 <Send className="w-3.5 h-3.5" />
-                                <span>{isSubmittingReview ? 'Submitting...' : editingReviewId ? 'Save Changes' : 'Post Verified Review'}</span>
+                                <span>
+                                  {isUploadingImage
+                                    ? 'Uploading Photo...'
+                                    : isSubmittingReview
+                                    ? 'Submitting Review...'
+                                    : editingReviewId
+                                    ? 'Save Changes'
+                                    : 'Post Verified Review'}
+                                </span>
                               </button>
                             </form>
                           </div>
@@ -601,9 +731,15 @@ export const ProductDetailModal: React.FC = () => {
                               <div className="flex items-center justify-between text-xs">
                                 <div className="flex items-center gap-2">
                                   <strong className="text-slate-800">{r.customerName}</strong>
-                                  <span className="text-[10px] text-emerald-800 bg-emerald-100/70 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
-                                    <Check className="w-2.5 h-2.5" /> Verified Purchase
-                                  </span>
+                                  {r.isDemo ? (
+                                    <span className="text-[10px] text-blue-800 bg-blue-100/70 px-1.5 py-0.5 rounded font-semibold flex items-center gap-1 border border-blue-200/60">
+                                      <Check className="w-2.5 h-2.5" /> Demo Review
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded font-semibold flex items-center gap-1 border border-emerald-200/60">
+                                      <Check className="w-2.5 h-2.5" /> Verified Purchase
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-1 text-amber-500">
                                   {Array.from({ length: 5 }).map((_, i) => (
@@ -616,11 +752,11 @@ export const ProductDetailModal: React.FC = () => {
                               </div>
                               <p className="text-xs text-slate-600 leading-relaxed">{r.comment}</p>
                               {r.images && r.images.length > 0 && r.images[0] && (
-                                <div className="pt-1">
+                                <div className="pt-1.5">
                                   <img
                                     src={r.images[0]}
                                     alt="Review attachment"
-                                    className="w-16 h-16 rounded-lg object-cover border border-slate-200"
+                                    className="w-20 h-20 rounded-lg object-cover border border-slate-200 hover:scale-105 transition-transform cursor-pointer"
                                     onError={(e) => {
                                       (e.currentTarget as HTMLImageElement).style.display = 'none';
                                     }}
@@ -633,13 +769,13 @@ export const ProductDetailModal: React.FC = () => {
                                   <div className="flex items-center gap-2">
                                     <button
                                       onClick={() => handleStartEditReview(r)}
-                                      className="text-slate-600 hover:text-slate-900 underline font-semibold"
+                                      className="text-slate-600 hover:text-slate-900 underline font-semibold cursor-pointer"
                                     >
                                       Edit
                                     </button>
                                     <button
                                       onClick={() => handleDeleteReview(r.id)}
-                                      className="text-red-500 hover:text-red-700 underline font-semibold"
+                                      className="text-red-500 hover:text-red-700 underline font-semibold cursor-pointer"
                                     >
                                       Delete
                                     </button>

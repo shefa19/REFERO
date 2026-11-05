@@ -151,10 +151,12 @@ interface StoreContextType {
   }) => Promise<Order>;
   confirmOrderReceived: (orderId: string) => Promise<{ success: boolean; message: string }>;
 
-  // Customer Point Transfers
+  // Customer Point Transfers & Requests
   submitPointTransfer: (recipientEmail: string, points: number, note?: string) => Promise<{ success: boolean; message: string }>;
+  requestPointsFromFriend: (targetEmail: string, points: number, note?: string) => Promise<{ success: boolean; message: string }>;
   approvePointTransfer: (requestId: string) => Promise<{ success: boolean; message: string }>;
   rejectPointTransfer: (requestId: string) => Promise<{ success: boolean; message: string }>;
+  seedShopProducts: (shopId: string, shopName: string, ownerId?: string) => Promise<{ success: boolean; count: number; message: string }>;
 
   // Shopkeeper workflows
   addProduct: (product: Omit<Product, 'id' | 'createdAt' | 'rating' | 'reviewCount'>) => void | Promise<void>;
@@ -419,25 +421,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         }
 
-        // 4. Load reviews from Firestore
+        // 4. Load reviews from Firestore & merge with DEMO_REVIEWS
         try {
           const revQuery = currentUser?.role === 'admin'
             ? collection(activeDb, 'reviews')
             : query(collection(activeDb, 'reviews'), where('status', '==', 'published'));
           const revSnap = await getDocs(revQuery);
           if (isMounted) {
-            if (revSnap.docs.length > 0) {
-              const loadedReviews = revSnap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-              })) as ProductReview[];
-              setReviews(loadedReviews);
-            } else {
-              setReviews([]);
-            }
+            const firestoreReviews = revSnap.docs.map((d) => ({
+              id: d.id,
+              ...d.data(),
+            })) as ProductReview[];
+            // Seamlessly combine real reviews with DEMO_REVIEWS (avoiding duplicates)
+            const combinedReviews = [
+              ...firestoreReviews,
+              ...DEMO_REVIEWS.filter((d) => !firestoreReviews.some((r) => r.id === d.id)),
+            ];
+            setReviews(combinedReviews);
           }
         } catch (revErr) {
           console.warn('Firestore reviews fetch note:', revErr);
+          if (isMounted) {
+            setReviews(DEMO_REVIEWS);
+          }
         }
       } catch (err) {
         console.warn('Firestore initial data fetch note:', err);
@@ -1179,6 +1185,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             points,
             note: note || '',
             status: 'pending',
+            requestType: 'transfer',
             createdAt: new Date().toISOString(),
           });
 
@@ -1187,7 +1194,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const notifRef = doc(activeDb, 'notifications', notifId);
           transaction.set(notifRef, {
             id: notifId,
-            userId: recipientId,
+            userId: recipientId || cleanEmail,
+            recipientEmail: cleanEmail,
             title: 'Incoming Point Transfer',
             message: `${currentUser.fullName} sent you a point transfer request for ${points} REFERO Points.${note ? ` Note: "${note}"` : ''}`,
             type: 'transfer',
@@ -1208,6 +1216,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           points,
           note,
           status: 'pending',
+          requestType: 'transfer',
           createdAt: new Date().toISOString(),
         };
 
@@ -1216,7 +1225,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         // In-memory recipient notification
         const incomingNotif: NotificationItem = {
           id: `notif_incoming_transfer_${newRequestId}`,
-          userId: recipientId,
+          userId: recipientId || cleanEmail,
+          recipientEmail: cleanEmail,
           title: 'Incoming Point Transfer',
           message: `${currentUser.fullName} sent you a point transfer request for ${points} REFERO Points.${note ? ` Note: "${note}"` : ''}`,
           type: 'transfer',
@@ -1254,6 +1264,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       points,
       note,
       status: 'pending',
+      requestType: 'transfer',
       createdAt: new Date().toISOString(),
     };
 
@@ -1263,6 +1274,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const incomingNotif: NotificationItem = {
       id: `notif_incoming_transfer_${newRequestId}`,
       userId: recipientId,
+      recipientEmail: cleanEmail,
       title: 'Incoming Point Transfer',
       message: `${currentUser.fullName} sent you a point transfer request for ${points} REFERO Points.${note ? ` Note: "${note}"` : ''}`,
       type: 'transfer',
@@ -1276,9 +1288,112 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { success: true, message: 'Transfer request recorded as pending.' };
   };
 
+  const requestPointsFromFriend = async (
+    targetEmail: string,
+    points: number,
+    note?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!currentUser) {
+      return { success: false, message: 'You must be logged in to request points.' };
+    }
+
+    const cleanEmail = targetEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, message: 'Please provide a valid email address.' };
+    }
+
+    if (cleanEmail === currentUser.email.toLowerCase()) {
+      return { success: false, message: 'Self-requests are not permitted.' };
+    }
+
+    if (!points || points <= 0) {
+      return { success: false, message: 'Point amount must be greater than zero.' };
+    }
+
+    const activeDb = db;
+    if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+      try {
+        let recipientId = '';
+        let recipientData: any = {};
+        try {
+          const usersRef = collection(activeDb, 'users');
+          const recipientQuery = query(usersRef, where('email', '==', cleanEmail), limit(1));
+          const recipientSnap = await getDocs(recipientQuery);
+          if (!recipientSnap.empty) {
+            const recipientDoc = recipientSnap.docs[0];
+            recipientId = recipientDoc.id;
+            recipientData = recipientDoc.data();
+          }
+        } catch {}
+
+        const newRequestId = `req_point_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const requestDocRef = doc(activeDb, 'pointTransferRequests', newRequestId);
+
+        const newRequestData: PointTransferRequest = {
+          id: newRequestId,
+          senderId: currentUser.id,
+          senderName: currentUser.fullName,
+          senderEmail: currentUser.email,
+          recipientId,
+          recipientEmail: cleanEmail,
+          recipientName: recipientData.fullName || cleanEmail.split('@')[0],
+          points,
+          note: note ? note.trim() : '',
+          status: 'pending',
+          requestType: 'request',
+          createdAt: new Date().toISOString(),
+        };
+
+        await setDoc(requestDocRef, newRequestData);
+
+        // Notification for the friend from whom points are requested
+        const notifId = `notif_incoming_req_${newRequestId}`;
+        const notifRef = doc(activeDb, 'notifications', notifId);
+        await setDoc(notifRef, {
+          id: notifId,
+          userId: recipientId || cleanEmail,
+          recipientEmail: cleanEmail,
+          title: 'Incoming Point Request',
+          message: `${currentUser.fullName} requested ${points} REFERO Points from you.${note ? ` Note: "${note}"` : ''}`,
+          type: 'transfer',
+          link: 'transfers',
+          read: false,
+          createdAt: new Date().toISOString(),
+        });
+
+        setTransferRequests((prev) => [newRequestData, ...prev]);
+        showToast(`Point request for ${points} points sent to ${cleanEmail}`);
+        return { success: true, message: `Request for ${points} points sent successfully.` };
+      } catch (err: any) {
+        console.error('Request points error:', err);
+        return { success: false, message: err.message || 'Failed to submit point request.' };
+      }
+    }
+
+    // Demo Mode
+    const newRequestId = `req_point_${Date.now()}`;
+    const newRequestData: PointTransferRequest = {
+      id: newRequestId,
+      senderId: currentUser.id,
+      senderName: currentUser.fullName,
+      senderEmail: currentUser.email,
+      recipientId: `user_recip_${Date.now()}`,
+      recipientEmail: cleanEmail,
+      recipientName: cleanEmail.split('@')[0],
+      points,
+      note: note ? note.trim() : '',
+      status: 'pending',
+      requestType: 'request',
+      createdAt: new Date().toISOString(),
+    };
+    setTransferRequests((prev) => [newRequestData, ...prev]);
+    showToast(`Point request for ${points} points sent to ${cleanEmail}`);
+    return { success: true, message: `Request for ${points} points sent successfully.` };
+  };
+
   const approvePointTransfer = async (requestId: string): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) {
-      return { success: false, message: 'You must be logged in to accept point transfers.' };
+      return { success: false, message: 'You must be logged in to accept point requests or transfers.' };
     }
 
     const request = transferRequests.find((r) => r.id === requestId);
@@ -1286,9 +1401,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { success: false, message: 'Transfer request not found.' };
     }
 
-    // Validation 1: Prevent accepting own transfer
+    // Validation 1: Prevent accepting own transfer/request
     if (request.senderId === currentUser.id) {
-      return { success: false, message: 'You cannot accept your own point transfer request.' };
+      return { success: false, message: 'You cannot accept your own request.' };
     }
 
     // Validation 2: Ensure current user is the intended recipient
@@ -1297,15 +1412,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       request.recipientEmail.toLowerCase() === currentUser.email.toLowerCase();
 
     if (!isRecipient) {
-      return { success: false, message: 'Unauthorized: This point transfer request was not sent to you.' };
+      return { success: false, message: 'Unauthorized: This request was not sent to you.' };
     }
 
     // Validation 3: Ensure request is strictly pending
     if (request.status !== 'pending') {
-      return { success: false, message: `This transfer request has already been ${request.status}.` };
+      return { success: false, message: `This request has already been ${request.status}.` };
     }
 
     const pointsAmount = request.points;
+    const isPointRequest = request.requestType === 'request';
     const activeDb = db;
 
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
@@ -1314,11 +1430,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await runTransaction(activeDb, async (transaction) => {
           const reqDoc = await transaction.get(requestRef);
           if (!reqDoc.exists()) {
-            throw new Error('Transfer request not found on server.');
+            throw new Error('Request record not found on server.');
           }
           const reqData = reqDoc.data() as PointTransferRequest;
           if (reqData.status !== 'pending') {
-            throw new Error(`Transfer request has already been ${reqData.status}.`);
+            throw new Error(`This request has already been ${reqData.status}.`);
           }
 
           // Verify recipient ownership on server
@@ -1326,11 +1442,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             reqData.recipientId === currentUser.id ||
             reqData.recipientEmail.toLowerCase() === currentUser.email.toLowerCase();
           if (!serverIsRecipient) {
-            throw new Error('Unauthorized: You are not the recipient of this transfer request.');
+            throw new Error('Unauthorized: You are not the intended recipient of this request.');
           }
 
           if (reqData.senderId === currentUser.id) {
-            throw new Error('You cannot accept your own point transfer request.');
+            throw new Error('You cannot accept your own request.');
           }
 
           const senderRef = doc(activeDb, 'users', reqData.senderId);
@@ -1342,125 +1458,215 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           ]);
 
           if (!sDoc.exists() || !rDoc.exists()) {
-            throw new Error('Sender or recipient user profile does not exist.');
+            throw new Error('User profiles could not be retrieved.');
           }
 
           const sData = sDoc.data();
           const rData = rDoc.data();
-          const sBalance = typeof sData.pointsBalance === 'number' ? sData.pointsBalance : 0;
-          if (sBalance < reqData.points) {
-            throw new Error(`Sender has insufficient points balance (${sBalance} pts available, ${reqData.points} requested).`);
-          }
-
-          const rBalance = typeof rData.pointsBalance === 'number' ? rData.pointsBalance : 0;
+          const sBalance = typeof sData.pointsBalance === 'number' ? sData.pointsBalance : (typeof sData.points === 'number' ? sData.points : 0);
+          const rBalance = typeof rData.pointsBalance === 'number' ? rData.pointsBalance : (typeof rData.points === 'number' ? rData.points : 0);
           const transferPoints = Number(reqData.points);
           const timestamp = new Date().toISOString();
 
-          // 1. Debit sender with lastTransferRequestId reference for security rules
-          transaction.update(senderRef, {
-            pointsBalance: sBalance - transferPoints,
-            points: sBalance - transferPoints,
-            lastTransferRequestId: requestId,
-            updatedAt: timestamp,
-          });
+          if (isPointRequest) {
+            // Point Request: User B (currentUser) is sending points to User A (reqData.senderId)
+            if (rBalance < transferPoints) {
+              throw new Error(`You have insufficient points balance (${rBalance} pts available, ${reqData.points} requested).`);
+            }
 
-          // 2. Credit recipient with lastTransferRequestId reference
-          transaction.update(recipientRef, {
-            pointsBalance: rBalance + transferPoints,
-            points: rBalance + transferPoints,
-            lastTransferRequestId: requestId,
-            updatedAt: timestamp,
-          });
+            // Debit recipient (User B)
+            transaction.update(recipientRef, {
+              pointsBalance: rBalance - transferPoints,
+              points: rBalance - transferPoints,
+              lastTransferRequestId: requestId,
+              updatedAt: timestamp,
+            });
 
-          // 3. Sender debit ledger
-          const sTxRef = doc(collection(activeDb, 'pointTransactions'));
-          transaction.set(sTxRef, {
-            id: sTxRef.id,
-            userId: reqData.senderId,
-            type: 'transfer_sent',
-            points: -transferPoints,
-            relatedId: requestId,
-            description: `Transferred points to ${currentUser.fullName} (${currentUser.email})`,
-            ruleSnapshot: 'P2P Point Transfer',
-            status: 'completed',
-            createdAt: timestamp,
-          });
+            // Credit requester (User A)
+            transaction.update(senderRef, {
+              pointsBalance: sBalance + transferPoints,
+              points: sBalance + transferPoints,
+              lastTransferRequestId: requestId,
+              updatedAt: timestamp,
+            });
 
-          // 4. Recipient credit ledger
-          const rTxRef = doc(collection(activeDb, 'pointTransactions'));
-          transaction.set(rTxRef, {
-            id: rTxRef.id,
-            userId: currentUser.id,
-            type: 'transfer_received',
-            points: transferPoints,
-            relatedId: requestId,
-            description: `Received points transfer from ${reqData.senderName} (${reqData.senderEmail})`,
-            ruleSnapshot: 'P2P Point Transfer',
-            status: 'completed',
-            createdAt: timestamp,
-          });
+            // Debit ledger for User B
+            const rTxRef = doc(collection(activeDb, 'pointTransactions'));
+            transaction.set(rTxRef, {
+              id: rTxRef.id,
+              userId: currentUser.id,
+              type: 'transfer_sent',
+              points: -transferPoints,
+              relatedId: requestId,
+              description: `Sent requested points to ${reqData.senderName} (${reqData.senderEmail})`,
+              ruleSnapshot: 'P2P Point Request Fulfillment',
+              status: 'completed',
+              createdAt: timestamp,
+            });
 
-          // 5. Update request status to 'accepted'
-          transaction.update(requestRef, {
-            status: 'accepted',
-            recipientId: currentUser.id,
-            processedAt: timestamp,
-          });
+            // Credit ledger for User A
+            const sTxRef = doc(collection(activeDb, 'pointTransactions'));
+            transaction.set(sTxRef, {
+              id: sTxRef.id,
+              userId: reqData.senderId,
+              type: 'transfer_received',
+              points: transferPoints,
+              relatedId: requestId,
+              description: `Received requested points from ${currentUser.fullName} (${currentUser.email})`,
+              ruleSnapshot: 'P2P Point Request Fulfillment',
+              status: 'completed',
+              createdAt: timestamp,
+            });
 
-          // 6. Notify Sender: Point-transfer accepted (Event B)
-          const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
-          transaction.set(notifRef, {
-            id: `notif_transfer_acc_${requestId}`,
-            userId: reqData.senderId,
-            title: 'Point Transfer Accepted',
-            message: `${currentUser.fullName} accepted your transfer of ${reqData.points} REFERO Points.`,
-            type: 'transfer',
-            link: 'transfers',
-            read: false,
-            createdAt: timestamp,
-          });
+            // Update request
+            transaction.update(requestRef, {
+              status: 'accepted',
+              recipientId: currentUser.id,
+              processedAt: timestamp,
+            });
+
+            // Notify User A
+            const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
+            transaction.set(notifRef, {
+              id: `notif_transfer_acc_${requestId}`,
+              userId: reqData.senderId,
+              recipientEmail: reqData.senderEmail,
+              title: 'Point Request Accepted',
+              message: `${currentUser.fullName} accepted your request and sent you ${reqData.points} REFERO Points!`,
+              type: 'transfer',
+              link: 'transfers',
+              read: false,
+              createdAt: timestamp,
+            });
+          } else {
+            // Standard Transfer: User A (reqData.senderId) sent points to User B (currentUser)
+            if (sBalance < transferPoints) {
+              throw new Error(`Sender has insufficient points balance (${sBalance} pts available, ${reqData.points} requested).`);
+            }
+
+            // Debit sender (User A)
+            transaction.update(senderRef, {
+              pointsBalance: sBalance - transferPoints,
+              points: sBalance - transferPoints,
+              lastTransferRequestId: requestId,
+              updatedAt: timestamp,
+            });
+
+            // Credit recipient (User B)
+            transaction.update(recipientRef, {
+              pointsBalance: rBalance + transferPoints,
+              points: rBalance + transferPoints,
+              lastTransferRequestId: requestId,
+              updatedAt: timestamp,
+            });
+
+            // Debit ledger for User A
+            const sTxRef = doc(collection(activeDb, 'pointTransactions'));
+            transaction.set(sTxRef, {
+              id: sTxRef.id,
+              userId: reqData.senderId,
+              type: 'transfer_sent',
+              points: -transferPoints,
+              relatedId: requestId,
+              description: `Transferred points to ${currentUser.fullName} (${currentUser.email})`,
+              ruleSnapshot: 'P2P Point Transfer',
+              status: 'completed',
+              createdAt: timestamp,
+            });
+
+            // Credit ledger for User B
+            const rTxRef = doc(collection(activeDb, 'pointTransactions'));
+            transaction.set(rTxRef, {
+              id: rTxRef.id,
+              userId: currentUser.id,
+              type: 'transfer_received',
+              points: transferPoints,
+              relatedId: requestId,
+              description: `Received points transfer from ${reqData.senderName} (${reqData.senderEmail})`,
+              ruleSnapshot: 'P2P Point Transfer',
+              status: 'completed',
+              createdAt: timestamp,
+            });
+
+            // Update request
+            transaction.update(requestRef, {
+              status: 'accepted',
+              recipientId: currentUser.id,
+              processedAt: timestamp,
+            });
+
+            // Notify User A
+            const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_acc_${requestId}`);
+            transaction.set(notifRef, {
+              id: `notif_transfer_acc_${requestId}`,
+              userId: reqData.senderId,
+              recipientEmail: reqData.senderEmail,
+              title: 'Point Transfer Accepted',
+              message: `${currentUser.fullName} accepted your transfer of ${reqData.points} REFERO Points.`,
+              type: 'transfer',
+              link: 'transfers',
+              read: false,
+              createdAt: timestamp,
+            });
+          }
         });
       } catch (err: any) {
         console.error('Accept transfer transaction error:', err);
         return {
           success: false,
-          message: err.message || 'Failed to accept point transfer.',
+          message: err.message || 'Failed to accept point request.',
         };
       }
     } else {
       // Demo Mode execution
       const senderUser = DEMO_USERS.find((u) => u.id === request.senderId);
-      if (senderUser) {
-        if (senderUser.pointsBalance < request.points) {
+      if (isPointRequest) {
+        if (currentUser.pointsBalance < request.points) {
           return {
             success: false,
-            message: `Sender has insufficient points balance (${senderUser.pointsBalance} pts available, ${request.points} requested).`,
+            message: `You have insufficient points balance (${currentUser.pointsBalance} pts available, ${request.points} requested).`,
           };
         }
-        senderUser.pointsBalance -= request.points;
+        if (senderUser) {
+          senderUser.pointsBalance += request.points;
+        }
+      } else {
+        if (senderUser) {
+          if (senderUser.pointsBalance < request.points) {
+            return {
+              success: false,
+              message: `Sender has insufficient points balance (${senderUser.pointsBalance} pts available, ${request.points} requested).`,
+            };
+          }
+          senderUser.pointsBalance -= request.points;
+        }
       }
 
       // Add ledger entries
       const sTx: PointTransaction = {
         id: `tx_${Date.now()}_transfersent`,
-        userId: request.senderId,
+        userId: isPointRequest ? currentUser.id : request.senderId,
         type: 'transfer_sent',
         points: -request.points,
         relatedId: requestId,
-        description: `Transferred points to ${currentUser.fullName} (${currentUser.email})`,
-        ruleSnapshot: 'P2P Point Transfer',
+        description: isPointRequest
+          ? `Sent requested points to ${request.senderName}`
+          : `Transferred points to ${currentUser.fullName}`,
+        ruleSnapshot: isPointRequest ? 'P2P Point Request Fulfillment' : 'P2P Point Transfer',
         status: 'completed',
         createdAt: new Date().toISOString(),
       };
 
       const rTx: PointTransaction = {
         id: `tx_${Date.now()}_transferrec`,
-        userId: currentUser.id,
+        userId: isPointRequest ? request.senderId : currentUser.id,
         type: 'transfer_received',
         points: request.points,
         relatedId: requestId,
-        description: `Received points transfer from ${request.senderName} (${request.senderEmail})`,
-        ruleSnapshot: 'P2P Point Transfer',
+        description: isPointRequest
+          ? `Received requested points from ${currentUser.fullName}`
+          : `Received points transfer from ${request.senderName}`,
+        ruleSnapshot: isPointRequest ? 'P2P Point Request Fulfillment' : 'P2P Point Transfer',
         status: 'completed',
         createdAt: new Date().toISOString(),
       };
@@ -1471,8 +1677,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const senderNotif: NotificationItem = {
         id: `notif_transfer_acc_${requestId}`,
         userId: request.senderId,
-        title: 'Point Transfer Accepted',
-        message: `${currentUser.fullName} accepted your transfer of ${request.points} REFERO Points.`,
+        recipientEmail: request.senderEmail,
+        title: isPointRequest ? 'Point Request Accepted' : 'Point Transfer Accepted',
+        message: isPointRequest
+          ? `${currentUser.fullName} accepted your request and sent you ${request.points} REFERO Points!`
+          : `${currentUser.fullName} accepted your transfer of ${request.points} REFERO Points.`,
         type: 'transfer',
         link: 'transfers',
         read: false,
@@ -1481,8 +1690,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setNotifications((prev) => [senderNotif, ...prev]);
     }
 
+    const newBalance = isPointRequest
+      ? Math.max(0, currentUser.pointsBalance - pointsAmount)
+      : currentUser.pointsBalance + pointsAmount;
+
     updateCurrentUserProfile({
-      pointsBalance: currentUser.pointsBalance + pointsAmount,
+      pointsBalance: newBalance,
+      points: newBalance,
     });
 
     setTransferRequests((prev) =>
@@ -1493,18 +1707,22 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       )
     );
 
-    showToast(`Approved transfer of ${pointsAmount} REFERO Points!`);
-    return { success: true, message: `Approved transfer of ${pointsAmount} REFERO Points!` };
+    const successMsg = isPointRequest
+      ? `Transferred ${pointsAmount} REFERO Points to ${request.senderName}!`
+      : `Accepted transfer of ${pointsAmount} REFERO Points!`;
+
+    showToast(successMsg, 'success');
+    return { success: true, message: successMsg };
   };
 
   const rejectPointTransfer = async (requestId: string): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) {
-      return { success: false, message: 'You must be logged in to decline transfer requests.' };
+      return { success: false, message: 'You must be logged in to decline requests.' };
     }
 
     const request = transferRequests.find((r) => r.id === requestId);
     if (!request) {
-      return { success: false, message: 'Transfer request not found.' };
+      return { success: false, message: 'Request not found.' };
     }
 
     const isRecipient =
@@ -1512,12 +1730,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       request.recipientEmail.toLowerCase() === currentUser.email.toLowerCase();
 
     if (!isRecipient) {
-      return { success: false, message: 'Unauthorized: This point transfer request was not sent to you.' };
+      return { success: false, message: 'Unauthorized: This request was not sent to you.' };
     }
 
     if (request.status !== 'pending') {
-      return { success: false, message: `This transfer request has already been ${request.status}.` };
+      return { success: false, message: `This request has already been ${request.status}.` };
     }
+
+    const isPointRequest = request.requestType === 'request';
+    const notifTitle = isPointRequest ? 'Point Request Declined' : 'Point Transfer Declined';
+    const notifMsg = isPointRequest
+      ? `${currentUser.fullName} declined your request for ${request.points} REFERO Points.`
+      : `${currentUser.fullName} declined your transfer of ${request.points} REFERO Points.`;
 
     const activeDb = db;
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
@@ -1530,13 +1754,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           processedAt: timestamp,
         });
 
-        // Notify Sender: Point-transfer declined (Event B)
         const notifRef = doc(collection(activeDb, 'notifications'), `notif_transfer_dec_${requestId}`);
         await setDoc(notifRef, {
           id: `notif_transfer_dec_${requestId}`,
           userId: request.senderId,
-          title: 'Point Transfer Declined',
-          message: `${currentUser.fullName} declined your transfer request of ${request.points} REFERO Points.`,
+          recipientEmail: request.senderEmail,
+          title: notifTitle,
+          message: notifMsg,
           type: 'transfer',
           link: 'transfers',
           read: false,
@@ -1544,7 +1768,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       } catch (err: any) {
         console.error('Firestore reject transfer error:', err);
-        return { success: false, message: err.message || 'Failed to decline transfer.' };
+        return { success: false, message: err.message || 'Failed to decline request.' };
       }
     }
 
@@ -1552,8 +1776,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const notifItem: NotificationItem = {
       id: `notif_transfer_dec_${requestId}`,
       userId: request.senderId,
-      title: 'Point Transfer Declined',
-      message: `${currentUser.fullName} declined your transfer request of ${request.points} REFERO Points.`,
+      recipientEmail: request.senderEmail,
+      title: notifTitle,
+      message: notifMsg,
       type: 'transfer',
       link: 'transfers',
       read: false,
@@ -1569,8 +1794,252 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       )
     );
 
-    showToast('Point transfer request declined.');
-    return { success: true, message: 'Transfer request rejected.' };
+    showToast('Point request declined.');
+    return { success: true, message: 'Request declined.' };
+  };
+
+  const seedShopProducts = async (
+    shopId: string,
+    shopName: string,
+    ownerId?: string
+  ): Promise<{ success: boolean; count: number; message: string }> => {
+    const activeDb = db;
+    const nowIso = new Date().toISOString();
+    const effectiveOwnerId = ownerId || currentUser?.id || 'usr_seller_habib';
+
+    const sampleCatalog: Omit<Product, 'id' | 'createdAt' | 'rating' | 'reviewCount'>[] = [
+      {
+        shopId,
+        shopName,
+        title: 'ঘানি ভাঙা খাঁটি সরিষার তেল (Pure Cold-Pressed Mustard Oil - 1L)',
+        description: 'Traditionally extracted wooden ghani cold-pressed mustard oil with a strong, natural pungent aroma. Zero chemical processing or adulteration.',
+        category: 'Groceries & Organics',
+        brand: shopName,
+        price: 360,
+        originalPrice: 400,
+        discountPercent: 10,
+        stock: 45,
+        images: ['https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=600&q=80'],
+        unit: '1 Litre bottle',
+        pointsEarned: 18,
+        canRedeemWithPoints: true,
+        pointPrice: 720,
+        isFeatured: true,
+        isTrending: true,
+        isBestSeller: true,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'সুন্দরবনের প্রাকৃতিক খলিশা ফুলের মধু (Sundarbans Natural Khalisha Honey - 500g)',
+        description: 'Freshly harvested wild forest honey collected by traditional Mouvals in the Sundarbans. Natural, raw, unheated, and rich in natural antioxidants.',
+        category: 'Organic Products',
+        brand: shopName,
+        price: 650,
+        originalPrice: 720,
+        discountPercent: 10,
+        stock: 30,
+        images: ['https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=600&q=80'],
+        unit: '500g glass jar',
+        pointsEarned: 32,
+        canRedeemWithPoints: true,
+        pointPrice: 1300,
+        isFeatured: true,
+        isTrending: true,
+        isBestSeller: true,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'খাঁটি গাওয়া ঘি - বগুড়ার ঐতিহ্যবাহী (Premium Bogura Cow Ghee - 500g)',
+        description: 'Slow-simmered artisanal cow ghee prepared from fresh grass-fed milk. Distinctive golden granular texture and rich authentic aroma.',
+        category: 'Groceries & Organics',
+        brand: shopName,
+        price: 850,
+        originalPrice: 950,
+        discountPercent: 11,
+        stock: 25,
+        images: ['https://images.unsplash.com/photo-1631451095765-2c91616fc9e6?auto=format&fit=crop&w=600&q=80'],
+        unit: '500g jar',
+        pointsEarned: 42,
+        canRedeemWithPoints: true,
+        pointPrice: 1700,
+        isFeatured: true,
+        isTrending: true,
+        isBestSeller: true,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'দিনাজপুরের সুগন্ধি চিনিগুঁড়া চাল (Dinajpur Premium Chinigura Rice - 5kg)',
+        description: 'Naturally aged fine aromatic Chinigura rice directly sourced from certified farmers in Dinajpur. Exceptional scent and fluffy texture.',
+        category: 'Daily Essentials',
+        brand: shopName,
+        price: 750,
+        originalPrice: 820,
+        discountPercent: 9,
+        stock: 60,
+        images: ['https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=600&q=80'],
+        unit: '5kg pack',
+        pointsEarned: 37,
+        canRedeemWithPoints: true,
+        pointPrice: 1500,
+        isFeatured: false,
+        isTrending: true,
+        isBestSeller: true,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'শ্রীমঙ্গলের ব্ল্যাক টি - ফার্স্ট ফ্লাশ (Sreemangal Premium CTC Black Tea - 400g)',
+        description: 'Single-estate handpicked whole-leaf black tea from the lush hills of Sreemangal. Produces an invigorating rich liquor with a brisk finish.',
+        category: 'Tea & Beverages',
+        brand: shopName,
+        price: 290,
+        originalPrice: 330,
+        discountPercent: 12,
+        stock: 50,
+        images: ['https://images.unsplash.com/photo-1576092768241-dec231879fc3?auto=format&fit=crop&w=600&q=80'],
+        unit: '400g foil pack',
+        pointsEarned: 14,
+        canRedeemWithPoints: false,
+        isFeatured: false,
+        isTrending: true,
+        isBestSeller: false,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'স্পেশাল পাঁচফোড়ন ও গোটা গরম মশলা (Artisanal Whole Garam Masala Blend - 250g)',
+        description: 'A master blend of green cardamom, cinnamon quills, cloves, mace, and cumin seeds hand-sorted for maximum pungency and fragrance.',
+        category: 'Kitchen & Spices',
+        brand: shopName,
+        price: 220,
+        originalPrice: 250,
+        discountPercent: 12,
+        stock: 40,
+        images: ['https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=600&q=80'],
+        unit: '250g pouch',
+        pointsEarned: 11,
+        canRedeemWithPoints: false,
+        isFeatured: false,
+        isTrending: false,
+        isBestSeller: false,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'পাহাড়ি অর্গানিক হলুদ গুঁড়া (Organic Hill Turmeric Powder - 200g)',
+        description: 'High-curcumin organic turmeric sun-dried and finely stone-ground from the Chittagong Hill Tracts. Vibrant natural yellow color.',
+        category: 'Kitchen & Spices',
+        brand: shopName,
+        price: 180,
+        originalPrice: 210,
+        discountPercent: 14,
+        stock: 55,
+        images: ['https://images.unsplash.com/photo-1615485290382-441e4d049cb5?auto=format&fit=crop&w=600&q=80'],
+        unit: '200g jar',
+        pointsEarned: 9,
+        canRedeemWithPoints: false,
+        isFeatured: false,
+        isTrending: false,
+        isBestSeller: false,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'যশোরের খাঁটি ঝোলা খেজুর গুড় (Natural Date Palm Liquid Molasses - 1kg)',
+        description: 'Traditional woodfire boiled winter date palm sap molasses from Jashore. Irresistible caramel aroma and smooth mouthfeel.',
+        category: 'Groceries & Organics',
+        brand: shopName,
+        price: 480,
+        originalPrice: 550,
+        discountPercent: 13,
+        stock: 35,
+        images: ['https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?auto=format&fit=crop&w=600&q=80'],
+        unit: '1kg clay pot',
+        pointsEarned: 24,
+        canRedeemWithPoints: true,
+        pointPrice: 960,
+        isFeatured: true,
+        isTrending: true,
+        isBestSeller: true,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'বগুড়ার শুকনো লাল ঝাল মরিচ (Sariakandi Sun-Dried Whole Red Chili - 250g)',
+        description: 'Naturally sun-cured whole red chilis from the riverbanks of Sariakandi, Bogura. Unmatched spiciness and fiery crimson color.',
+        category: 'Kitchen & Spices',
+        brand: shopName,
+        price: 195,
+        originalPrice: 230,
+        discountPercent: 15,
+        stock: 40,
+        images: ['https://images.unsplash.com/photo-1588252303782-cb80119abd6d?auto=format&fit=crop&w=600&q=80'],
+        unit: '250g packet',
+        pointsEarned: 10,
+        canRedeemWithPoints: false,
+        isFeatured: false,
+        isTrending: false,
+        isBestSeller: false,
+      },
+      {
+        shopId,
+        shopName,
+        title: 'হিমালয়ান পিঙ্ক ক্রিস্টাল লবণ (Himalayan Pink Rock Salt Granules - 1kg)',
+        description: 'Unrefined natural pink mineral salt containing 84 essential trace minerals. Healthy alternative to industrial table salt.',
+        category: 'Daily Essentials',
+        brand: shopName,
+        price: 160,
+        originalPrice: 190,
+        discountPercent: 16,
+        stock: 70,
+        images: ['https://images.unsplash.com/photo-1518110925495-5fe2fda0442c?auto=format&fit=crop&w=600&q=80'],
+        unit: '1kg pouch',
+        pointsEarned: 8,
+        canRedeemWithPoints: true,
+        pointPrice: 320,
+        isFeatured: false,
+        isTrending: false,
+        isBestSeller: true,
+      },
+    ];
+
+    let addedCount = 0;
+    const newProductItems: Product[] = [];
+
+    for (let i = 0; i < sampleCatalog.length; i++) {
+      const p = sampleCatalog[i];
+      const deterministicId = `prod_${shopId}_${String(i + 1).padStart(2, '0')}`;
+      if (products.some((existing) => existing.id === deterministicId)) {
+        continue;
+      }
+      const prod: Product = {
+        ...p,
+        id: deterministicId,
+        rating: 4.8,
+        reviewCount: 20 + i * 2,
+        createdAt: nowIso,
+      };
+
+      if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+        try {
+          await setDoc(doc(activeDb, 'products', deterministicId), cleanUndefinedFields(prod));
+        } catch (err) {
+          console.warn('Firestore product seed error for', deterministicId, err);
+        }
+      }
+      newProductItems.push(prod);
+      addedCount++;
+    }
+
+    if (newProductItems.length > 0) {
+      setProducts((prev) => [...prev, ...newProductItems]);
+    }
+
+    showToast(`Successfully added ${addedCount} products to ${shopName}!`, 'success');
+    return { success: true, count: addedCount, message: `Added ${addedCount} products to ${shopName}.` };
   };
 
   // Shopkeeper Actions
@@ -3069,11 +3538,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         createOrder,
         confirmOrderReceived,
         submitPointTransfer,
+        requestPointsFromFriend,
         approvePointTransfer,
         rejectPointTransfer,
         addProduct,
         updateProduct,
         deleteProduct,
+        seedShopProducts,
         updateOrderItemStatus,
         applyForSellerShop,
         updateShopPolicies,

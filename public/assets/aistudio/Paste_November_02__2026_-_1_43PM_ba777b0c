@@ -1,0 +1,819 @@
+# REFERO V2 — FINAL MASTER PROMPT
+## Complete Codebase Correction, Firebase Security Overhaul, Feature Completion & Production Readiness
+
+You are working on my existing REFERO V2 multi-vendor e-commerce project. This is the FINAL comprehensive implementation task. Do not merely audit, explain, or provide recommendations. Inspect the entire existing codebase, identify every relevant defect, implement all necessary corrections, and complete the project to the highest practical level possible within the existing Firebase Spark Plan.
+
+**Do not ask me to provide another prompt, approve individual code changes, or return for another review. Make the necessary implementation decisions yourself.**
+
+---
+
+# 1. PROJECT IDENTITY AND NON-NEGOTIABLE PRESERVATION
+
+Firebase Project ID: `refero-d897d`
+
+Existing primary Admin account:
+- Email: `admin@refero.com.bd`
+- This is an existing real Admin account.
+
+CRITICAL PRESERVATION REQUIREMENTS:
+
+1. Never delete, reset, recreate, or replace the Firebase project.
+2. Never delete or overwrite existing users, Admin accounts, shops, products, orders, customer points, point transaction history, referrals, or other production records.
+3. Never change the existing Admin's role, UID, password, email, or account ownership.
+4. Never create a new public Admin registration option.
+5. Never introduce a fake Admin, Demo Admin, role-switching login, hardcoded production credentials, or frontend-only authentication bypass.
+6. Preserve existing working features and improve them without unnecessarily rewriting unrelated code.
+7. Do not run destructive database migrations, mass updates, collection deletions, or production data resets.
+8. Do not automatically deploy anything to Firebase.
+9. Do not expose credentials, API secrets, private user information, or Firebase configuration secrets in source code.
+10. Preserve the current project architecture and existing real Firebase connection.
+
+If an existing implementation conflicts with these requirements, correct the implementation without destroying existing data.
+
+---
+
+# 2. COMPLETE PROJECT-WIDE AUDIT
+
+Inspect the entire project, not just the files mentioned in this prompt.
+
+Inspect at minimum:
+
+- `src/context/StoreContext.tsx`
+- `src/services/firebase/`
+- `src/types/`
+- `src/components/`
+- `src/pages/`
+- Authentication and registration components
+- Customer Dashboard
+- Shopkeeper Dashboard
+- Admin Dashboard
+- Product Detail Modal
+- Checkout and Cart
+- Navbar and responsive navigation
+- `firestore.rules`
+- `storage.rules`
+- Firebase configuration
+- All point calculation, transfer, refund, referral, and order-management functions.
+
+Search the entire codebase for:
+- Cloud Functions dependencies and unused function stubs.
+- Demo authentication and role-switching logic.
+- Direct point balance modifications.
+- Unprotected Firestore writes.
+- Incorrect Firestore collection paths.
+- Duplicate point transactions.
+- Missing transaction rollback handling.
+- Incorrect seller authorization.
+- Unverified product reviews.
+- Unsafe file uploads.
+- Inconsistent field names.
+- Hardcoded production data.
+- Broken mobile layouts.
+- Missing loading and error states.
+
+Fix all relevant problems instead of only documenting them.
+
+Do not leave two conflicting implementations of the same feature.
+
+---
+
+# 3. FIREBASE SPARK PLAN — NO CLOUD FUNCTIONS DEPENDENCY
+
+The project must work without requiring Firebase Cloud Functions or a paid backend runtime.
+
+Use:
+- Firebase Authentication
+- Cloud Firestore
+- Firebase Storage, when configured and available
+- Firestore `runTransaction()`
+- Firestore atomic batch operations where appropriate
+- Strict Firestore Security Rules
+- Strict Firebase Storage Rules
+
+Do not leave production workflows dependent on:
+- `httpsCallable()`
+- Cloud Function endpoints
+- Server-side function triggers
+- Unavailable backend services
+- Inert fallback functions that appear functional but do nothing.
+
+Remove obsolete Cloud Functions dependencies and dead code safely.
+
+Important security requirement:
+
+Client-side code is untrusted. Never assume that hiding a button or validating a form protects a database operation.
+
+Every sensitive operation must be validated by Firestore Security Rules, including all related documents and balance changes in the same atomic operation.
+
+If a requirement cannot be securely guaranteed without a trusted backend, do not pretend that frontend code makes it secure. Implement the safest possible alternative and clearly identify the remaining limitation.
+
+---
+
+# 4. AUTHENTICATION AND ROLE SECURITY
+
+Implement and verify the complete authentication system.
+
+Supported roles:
+- Admin
+- Shopkeeper
+- Customer
+- Guest
+
+Requirements:
+
+1. Use one common login interface.
+2. Authenticate using Firebase Email/Password Authentication.
+3. Resolve the actual role using the authenticated user's Firestore `/users/{uid}` profile.
+4. Route each user to the correct dashboard.
+5. Public registration must allow only Customer and Shopkeeper.
+6. Public users must never create an Admin account.
+7. A user must not be able to modify their own role, account status, points, pointsBalance, pendingPoints, referral identity, or other protected fields.
+8. Seller approval, rejection, suspension, and reinstatement must be restricted to the real Admin.
+9. Seller accounts must remain unable to add or modify products until their shop is approved.
+10. Suspended or rejected sellers must not continue performing seller operations.
+11. Admin permissions must never depend on a local JavaScript variable, email-only comparison, local storage, demo account, or UI role switcher.
+12. Preserve the existing Admin account and its real Firebase UID.
+
+For the Admin security model, use the existing protected Admin profile and prevent public users from creating or promoting themselves to Admin.
+
+If a stronger Admin-only provisioning mechanism is available within the existing architecture, use it without breaking the current Admin account.
+
+---
+
+# 5. COMPLETE FIRESTORE SECURITY RULES REWRITE
+
+This is one of the most important tasks.
+
+Do not simply append rules to the existing file. Review every existing collection and rewrite the complete `firestore.rules` file with consistent, restrictive, production-oriented authorization.
+
+The final rules must include all collections actually used by the application.
+
+At minimum, inspect and correctly secure:
+
+- `/users/{userId}`
+- `/users/{userId}/cart/{cartItemId}`
+- `/shops/{shopId}`
+- `/products/{productId}`
+- `/orders/{orderId}`
+- `/pointTransactions/{txId}`
+- `/pointTransferRequests/{requestId}`
+- `/reviews/{reviewId}`
+- `/referrals/{referralId}`
+- `/adminSettings/{settingId}`
+- `/auditLogs/{logId}`
+- `/notifications/{notificationId}`
+- Any additional collection or subcollection used by the existing project.
+
+Use a default-deny rule for every unspecified path.
+
+## 5.1 User Rules
+
+- Only an authenticated user may create their own initial profile.
+- Public creation must force `role == 'customer'`.
+- Initial points, pointsBalance, and pendingPoints must be zero.
+- Users cannot promote themselves to Admin or Shopkeeper.
+- Users cannot change protected account fields.
+- Users may update only permitted personal profile fields.
+- Point balance changes must be allowed only through specifically verified atomic operations.
+- Admin permissions must be checked against the existing Admin profile.
+- Prevent unauthorized reads of sensitive user data.
+- Do not expose private phone numbers, email addresses, addresses, or account information unnecessarily.
+
+## 5.2 Shop Rules
+
+- Sellers may submit a shop application with their own authenticated UID as owner.
+- New seller shops must start as `pending`.
+- Only Admin can approve, reject, suspend, or reinstate a shop.
+- Sellers cannot change their own approval status.
+- Sellers cannot change ownerId.
+- Sellers cannot modify protected rating, reviewCount, or administrative fields.
+- Sellers may update only permitted shop profile and policy fields.
+- Suspended sellers must not be able to modify their shop or products.
+
+Preserve the existing seller policy fields:
+
+- deliveryPolicy
+- returnPolicy
+- cancellationPolicy
+- contactPerson
+- businessEmail
+- tradeLicenseNumber
+- customerSupportPhone
+- customerSupportEmail
+- customerSupportHours
+
+## 5.3 Product Rules
+
+- Public users may read publicly listed products.
+- Only the owner of an approved shop may create products for that shop.
+- Sellers may update only their own shop's products.
+- Sellers must not change shopId or ownership.
+- Sellers cannot manipulate product rating or reviewCount.
+- Validate price, stock, images, and important product fields.
+- Only Admin or the authorized shop owner may delete a product.
+- A suspended or unapproved seller cannot create or modify products.
+
+## 5.4 Order Rules
+
+Completely secure order creation and updates.
+
+- Only the authenticated customer may create an order for themselves.
+- Validate customerId and initial order status.
+- Protect subtotal, totalAmount, pointsUsed, pointsEarned, product items, shop ownership, and customer identity.
+- Prevent customers from changing order totals or awarding themselves points.
+- Sellers may update only permitted fulfillment fields for their own shop's orders.
+- Sellers cannot change customerId, product prices, payment amounts, pointsUsed, pointsEarned, or other financial fields.
+- Customers may cancel only when the order is eligible for cancellation.
+- Refunds must follow a validated and consistent refund process.
+- Admin may perform authorized administrative actions with appropriate audit records.
+
+If the existing order model supports multiple sellers in a single order, inspect and preserve that model. Do not accidentally authorize one seller to modify another seller's order items.
+
+## 5.5 Point Transfer Rules — CRITICAL
+
+Completely repair the current transfer vulnerabilities.
+
+Required workflow:
+
+1. Sender creates a pending transfer request.
+2. The recipient can see the request.
+3. Only the intended recipient can accept or reject it.
+4. The sender may cancel a pending request.
+5. Acceptance must use one atomic Firestore transaction.
+6. Sender balance decreases by exactly the requested amount.
+7. Recipient balance increases by exactly the same amount.
+8. Both balances must remain nonnegative.
+9. Both `pointsBalance` and any legacy `points` mirror field must remain consistent.
+10. The transfer request changes from pending to accepted exactly once.
+11. Exactly two corresponding ledger entries must be created.
+12. The sender and recipient ledger records must reference the same transfer request.
+13. Duplicate acceptance, replay, concurrent acceptance, and double spending must be prevented.
+14. Recipient identity, sender identity, transfer amount, request status, and all immutable request fields must be preserved.
+15. A user must never transfer points to themselves.
+16. No unauthorized user may create transfer ledger entries.
+
+Correct any mismatch between application status values such as `approved`, `accepted`, `rejected`, and `cancelled`. Use one consistent status model throughout UI, StoreContext, and Rules.
+
+The transaction must fail completely if any related write fails.
+
+## 5.6 Checkout Point Redemption Rules — CRITICAL
+
+- Checkout must validate the latest customer balance inside the transaction.
+- Points deduction must equal the order's actual `pointsUsed`.
+- The customer cannot redeem more points than available.
+- Points cannot become negative.
+- Balance mirror fields must remain consistent.
+- Order creation, stock deduction, point deduction, and corresponding ledger creation must be atomic wherever Firestore transaction limits allow.
+- The same order must never deduct points twice.
+- A failed checkout must not leave partially updated balances, stock, orders, or ledger entries.
+- Validate all relevant product and stock information before completing the transaction.
+- Prevent price manipulation and unauthorized discount manipulation.
+
+Use a safe transaction structure and account for Firestore transaction read-before-write requirements.
+
+## 5.7 Delivery Points Rules — CRITICAL
+
+Do not rely solely on a seller clicking "Delivered" to award points.
+
+Implement a customer delivery-confirmation workflow suitable for a Spark Plan project.
+
+Preferred workflow:
+
+1. Seller updates fulfillment status to `shipped` or `out_for_delivery`.
+2. The customer can confirm actual receipt from their authenticated account.
+3. Where practical, implement a delivery confirmation code/OTP generated or securely established through an approved workflow.
+4. The seller must not be able to confirm receipt on behalf of the customer.
+5. Points may be credited only after the required delivery confirmation conditions are met.
+6. The same order must never receive loyalty points more than once.
+7. Balance, order status, `pointsCredited`, and ledger creation must be handled atomically.
+8. Verify that the customer owns the order and that the eligible order items belong to the relevant seller.
+9. If delivery confirmation requires a trusted communication channel that cannot be provided securely without a backend, clearly explain the limitation and implement the safest available customer-confirmation alternative.
+
+Never describe seller self-declaration as independently verified physical delivery.
+
+## 5.8 Refund and Cancellation Rules — CRITICAL
+
+Completely correct the existing refund logic.
+
+- Refund must use the exact eligible order and exact refund calculation.
+- Never silently use `Math.max(0, balance - pointsEarned)` to hide an accounting error.
+- Do not allow arbitrary point deduction.
+- Validate whether the original points were actually credited.
+- Reverse only the points that were actually earned and credited.
+- If an order used points, handle restoration of redeemed points according to a consistent documented policy.
+- Maintain accurate order status and refund status.
+- Prevent repeated refunds and repeated reversals.
+- Write matching ledger records.
+- Preserve all historical ledger entries.
+- Balance, order state, refund state, and ledger changes must be atomic wherever possible.
+- If the refund calculation does not match the expected amount, reject the transaction rather than silently adjusting it.
+
+## 5.9 Referral Rules — CRITICAL
+
+Repair referral registration and reward processing.
+
+- A customer may not refer themselves.
+- Referrer identity must be verified against an existing referral code or valid referral relationship.
+- The referred user must not change their referrer later.
+- Duplicate referral rewards must be prevented.
+- A referral reward must require a genuinely qualifying order.
+- Define the qualifying condition consistently, preferably confirmed delivery.
+- Verify that the qualifying order belongs to the referred customer.
+- Reward the correct referrer, not the referred customer or seller.
+- The reward amount must follow the configured Admin policy.
+- Update the referrer's balance and create a matching ledger entry atomically.
+- A referral must be rewarded only once.
+- Sellers must not create referral bonuses.
+- Prevent clients from directly changing referral status to `reward_issued` without satisfying the complete qualifying conditions.
+
+## 5.10 Ledger Rules
+
+The point transaction ledger must be append-only.
+
+- Users may read only their own transactions.
+- Admin may read all transactions.
+- No normal user or seller may create arbitrary `admin_adjustment` or `referral_bonus` entries.
+- Sellers may not create financial ledger entries merely because they own a shop.
+- Ledger entries must match a valid corresponding operation.
+- Validate userId, transaction type, points sign, relatedId, amount, and relevant order or transfer references.
+- No update or delete of existing ledger records.
+- All ledger entries must be consistent with the associated balance changes.
+
+## 5.11 Review Rules — CRITICAL
+
+Completely repair the existing `/reviews/{reviewId}` security.
+
+A customer may create a review only when:
+
+1. The customer is authenticated.
+2. The order belongs to that customer.
+3. The order is genuinely delivered and eligible for review.
+4. The exact `productId` being reviewed exists in that delivered order's purchased items.
+5. The `shopId` corresponds to that purchased product.
+6. Rating is between 1 and 5.
+7. Comment length is within a reasonable limit.
+8. Review status is controlled safely.
+9. The review is linked to a valid order and product.
+
+Prevent:
+- Reviewing an unpurchased product.
+- Reviewing a product belonging to another order.
+- Duplicate reviews for the same eligible purchase.
+- Fake reviews by sellers.
+- Forged verified-purchase badges.
+- Customers setting their own review moderation status.
+- Unauthorized edits to customerId, orderId, productId, shopId, or verification fields.
+
+Implement a reliable duplicate-review strategy compatible with Firestore Rules. Do not claim duplicate prevention unless the actual database design and Rules enforce it.
+
+Customer features:
+- 1–5 star rating.
+- Written review.
+- Optional review images if supported.
+- Edit and delete own review within the defined policy.
+- Verified Purchase badge only for valid purchases.
+
+Admin features:
+- Publish.
+- Hide.
+- Flag.
+- Restore.
+- Moderation history and audit logging.
+
+Seller must not publish, delete, or modify customer reviews.
+
+Review aggregates must not be manipulable by sellers or ordinary customers. Update rating and reviewCount only through a securely validated mechanism.
+
+---
+
+# 6. FIREBASE STORAGE RULES — COMPLETE SECURITY REWRITE
+
+Create or fully correct `storage.rules`.
+
+Product image storage path:
+`products/{shopId}/{fileName}`
+
+Review image storage path:
+`reviews/{userId}/{fileName}`
+
+Avatar path:
+`avatars/{userId}/{fileName}`
+
+Requirements:
+
+1. Public read access only where needed for published product images and public content.
+2. Only the authenticated owner of an approved shop may upload product images for that shop.
+3. Admin may perform authorized product image management.
+4. A seller cannot upload into another seller's shop folder.
+5. Review images must belong to the authenticated review author.
+6. Avatar uploads must be restricted to the account owner.
+7. Validate file size.
+8. Validate MIME type.
+9. Reject executable files and non-image files.
+10. Restrict file types to safe image formats such as JPEG, PNG, and WebP.
+11. Enforce a reasonable size limit, such as 5 MB.
+12. Prevent unauthorized overwrite and deletion.
+13. Include a default-deny rule.
+
+Do not allow all authenticated users to upload to arbitrary product paths.
+
+---
+
+# 7. COMPLETE PRODUCT REVIEW EXPERIENCE
+
+Finish the complete review system in the UI and data layer.
+
+Product Detail page/modal must display:
+- Average rating.
+- Total review count.
+- Star distribution if practical.
+- Customer reviews.
+- Verified Purchase badge.
+- Review date.
+- Customer's own edit/delete controls.
+- Review submission form.
+
+Customer must receive clear feedback:
+- Review submitted successfully.
+- Delivery confirmation required.
+- Already reviewed.
+- Review is pending moderation, if applicable.
+- Upload failed.
+- Permission denied.
+
+Do not display DEMO_REVIEWS as real customer reviews in production.
+
+If sample/demo reviews exist, clearly isolate them from live Firebase data and never mix them into actual product ratings or review counts.
+
+---
+
+# 8. PRODUCT IMAGE UPLOAD — SELLER EXPERIENCE
+
+Complete the Seller product image system.
+
+Support both:
+
+**Option A — Upload from Device**
+- JPG
+- JPEG
+- PNG
+- WebP
+- Maximum 5 MB per image.
+- Preview before saving.
+- Upload progress indicator.
+- Clear error messages.
+- Remove and replace image.
+- Support up to five product images if the existing product model supports it.
+- Save valid Firebase Storage download URLs.
+
+**Option B — Image URL**
+- Allow sellers to paste an image URL.
+- Show preview.
+- Validate the URL.
+- Allow selecting a primary image.
+- Prevent empty or broken image references where possible.
+
+Important:
+- Prefer Firebase Storage when configured.
+- Do not silently store large Base64 images inside Firestore documents.
+- If Storage is unavailable, clearly show the issue and allow URL-based images as a fallback.
+- Do not claim an upload succeeded when it failed.
+- Storage Rules must enforce the actual seller ownership and authorization.
+
+---
+
+# 9. POINT POLICY AND CUSTOMER EXPERIENCE
+
+Preserve the agreed REFERO point policy.
+
+- Conversion rate: Admin configurable.
+- Points expiry: No expiry.
+- Earning: Product-specific earning rules first; amount-based fallback.
+- Point transfer: Request and recipient approval.
+- Checkout: Points may be used as a discount.
+- Cash withdrawal: Not supported.
+- No binary tree or left/right referral system.
+
+Implement:
+- Customer point balance.
+- Pending points, if applicable.
+- Point transaction history.
+- Earned points.
+- Redeemed points.
+- Sent and received transfers.
+- Referral rewards.
+- Admin-configured conversion rate.
+- Clear calculation before checkout.
+
+All displayed point balances must come from actual Firebase data in live mode.
+
+Never fabricate live balances or ledger history using demo data.
+
+---
+
+# 10. RESPONSIVE DESIGN — ALL DEVICES
+
+Review and improve the complete website, not only the Navbar and Customer Dashboard.
+
+Required viewport targets:
+
+- 320px
+- 360px
+- 375px
+- 390px
+- 430px
+- 768px
+- 1024px
+- 1280px
+- 1366px
+- 1440px and larger
+
+Test and correct:
+- Homepage
+- Product listing
+- Product details
+- Product filters
+- Search
+- Cart
+- Checkout
+- Login and registration
+- Customer Dashboard
+- Seller Dashboard
+- Admin Dashboard
+- Tables
+- Modals
+- Forms
+- Transfer requests
+- Review interface
+- Notifications
+- Navigation and footer.
+
+Requirements:
+- No horizontal page overflow.
+- No clipped content.
+- No overlapping buttons.
+- No unreadable text.
+- Proper responsive spacing.
+- Mobile-friendly navigation.
+- Touch-friendly controls.
+- Tables should adapt or support controlled horizontal scrolling.
+- Filters should use a mobile drawer or suitable collapsible layout.
+- Images must preserve aspect ratio.
+- Forms and modals must fit small screens.
+
+Maintain the modern, attractive, professional e-commerce design of REFERO. Do not replace the existing design with a generic plain template.
+
+---
+
+# 11. COMPLETE E-COMMERCE FUNCTIONALITY
+
+Verify and correct the following features:
+
+**Guest**
+- Browse public products.
+- Search and filter products.
+- View product details.
+- View public reviews.
+- Must log in to purchase or access protected features.
+
+**Customer**
+- Registration and login.
+- Customer profile.
+- Product search and filtering.
+- Cart and wishlist.
+- Checkout.
+- Order history.
+- Order cancellation where eligible.
+- Delivery confirmation.
+- Product reviews after eligible delivery.
+- Points balance and ledger.
+- Point transfer requests.
+- Referral information.
+- Notifications.
+
+**Shopkeeper**
+- Seller registration.
+- Shop application.
+- Admin approval.
+- Seller profile and policies.
+- Product creation and editing.
+- Product image upload or URL.
+- Inventory and stock.
+- Order management for own shop only.
+- Shipping and delivery status.
+- No access to another seller's data.
+- No unauthorized point adjustments or review moderation.
+
+**Admin**
+- Secure Admin login.
+- Customer management.
+- Seller application review.
+- Approve, reject, suspend, and reinstate sellers.
+- Require a reason for rejection or suspension.
+- Shop and product management.
+- Order management.
+- Point policy configuration.
+- Referral policy configuration.
+- Review moderation.
+- Notifications.
+- Audit logs.
+- Platform overview and reporting.
+
+All existing functional features must remain operational after changes.
+
+---
+
+# 12. LIVE FIREBASE DATA AND DEMO DATA SEPARATION
+
+The application must clearly distinguish Live Firebase data from Demo/Seed data.
+
+Requirements:
+
+- Live mode must read and write real Firebase collections.
+- Demo mode must be explicitly isolated.
+- Demo Admin or Demo role switching must never authenticate as a real production user.
+- Demo reviews must never appear as verified real reviews.
+- Demo balances must never overwrite real user balances.
+- Demo orders must never be treated as actual purchases.
+- Never silently switch to demo data after a security or network error and present it as real data.
+- Show a clear message when Firebase is unavailable.
+- Preserve existing live data.
+
+---
+
+# 13. CODE QUALITY, PERFORMANCE AND ACCESSIBILITY
+
+- Use TypeScript correctly.
+- Remove avoidable `any` types.
+- Fix TypeScript errors.
+- Remove unused code and obsolete imports.
+- Avoid duplicated business logic.
+- Use reusable components.
+- Add loading, empty, success, and error states.
+- Prevent duplicate form submissions.
+- Prevent double-click duplicate orders.
+- Add appropriate validation.
+- Ensure keyboard accessibility.
+- Add meaningful labels and accessible button names.
+- Optimize image loading.
+- Avoid unnecessary Firestore reads and writes.
+- Handle Firestore permission errors clearly.
+- Handle network failures safely.
+- Do not expose internal stack traces or sensitive data to customers.
+
+---
+
+# 14. REQUIRED AUTOMATED TESTING — DO NOT SKIP
+
+Do not mark the project complete merely because `npm run build` succeeds.
+
+Run every test that the existing environment supports.
+
+At minimum:
+
+## Code Tests
+- TypeScript check.
+- Production build.
+- Lint, if configured.
+- Resolve all blocking errors.
+
+## Firestore Security Rules Tests
+
+Use Firebase Emulator Suite and `@firebase/rules-unit-testing` if available.
+
+Test both allowed and denied cases.
+
+Test:
+1. Public Admin registration denied.
+2. Customer cannot promote themselves to Admin.
+3. Seller cannot approve their own shop.
+4. Pending seller cannot add products.
+5. Suspended seller cannot modify products.
+6. Seller A cannot modify Seller B's shop or products.
+7. Customer cannot access another customer's private data.
+8. Customer cannot modify protected point balances.
+9. Unauthorized transfer acceptance denied.
+10. Transfer amount mismatch denied.
+11. Duplicate transfer acceptance denied.
+12. Sender cannot overspend.
+13. Checkout point deduction mismatch denied.
+14. Duplicate checkout redemption denied.
+15. Customer cannot mark an order as delivered.
+16. Seller cannot independently confirm customer receipt.
+17. Unauthorized delivery point credit denied.
+18. Duplicate delivery point credit denied.
+19. Incorrect refund amount denied.
+20. Duplicate refund reversal denied.
+21. Seller cannot create referral bonuses.
+22. Invalid referral reward denied.
+23. Review for an unpurchased product denied.
+24. Review for another customer's order denied.
+25. Duplicate review denied.
+26. Customer cannot change review ownership or moderation status.
+27. Seller cannot moderate reviews.
+28. Unauthorized ledger creation denied.
+29. Ledger update and deletion denied.
+30. Unauthorized Storage upload denied.
+31. Seller cannot upload to another shop's folder.
+32. Oversized and non-image uploads denied.
+
+If emulator dependencies are not installed, install/configure them only when safe and feasible. Do not modify production data to test Rules.
+
+## Functional Tests
+
+Test:
+- Registration.
+- Login and role routing.
+- Seller application and Admin approval.
+- Product creation and editing.
+- Image upload and URL insertion.
+- Search and filtering.
+- Cart and checkout.
+- Point transfer.
+- Delivery confirmation.
+- Points credit.
+- Refund and cancellation.
+- Referral reward.
+- Review submission, editing, deletion, and moderation.
+- Notifications.
+
+## Responsive Tests
+
+Inspect the target viewport widths specified above.
+
+Do not claim a test passed unless it was actually executed and its result was observed.
+
+If a test cannot run, state exactly why and provide the safest alternative verification.
+
+---
+
+# 15. FINAL FIREBASE FILES AND IMPLEMENTATION
+
+Before completing, ensure the project contains:
+
+1. A complete corrected `firestore.rules`.
+2. A complete corrected `storage.rules`.
+3. Corrected Firebase service files.
+4. Corrected `StoreContext.tsx`.
+5. Corrected authentication and authorization logic.
+6. Corrected point transfer logic.
+7. Corrected checkout and refund logic.
+8. Corrected delivery confirmation and point-credit logic.
+9. Corrected referral logic.
+10. Corrected review system.
+11. Corrected seller image upload system.
+12. Fully responsive UI.
+13. Required tests or test configuration.
+14. Updated Firebase configuration/deployment instructions where necessary.
+
+Check that the actual application uses the new Rules-compatible field names, status values, and collection paths.
+
+Do not provide a sample Rules file while leaving the actual project file unchanged.
+
+Do not leave a feature partially implemented while claiming it is complete.
+
+---
+
+# 16. FINAL COMPLETION REQUIREMENTS
+
+When implementation is finished:
+
+1. Run the production build.
+2. Run TypeScript checks.
+3. Run all available tests.
+4. Run Firestore Rules tests where possible.
+5. Inspect the final complete Rules files.
+6. Verify that no obsolete Cloud Functions dependency remains in a production workflow.
+7. Verify that the existing Firebase project configuration is preserved.
+8. Verify that no destructive database operation was performed.
+9. Verify that no deployment was automatically triggered.
+
+Provide a concise completion summary containing:
+
+- All files changed.
+- All major security corrections implemented.
+- Complete Firestore Rules location.
+- Complete Storage Rules location.
+- Test results, with actual pass/fail status.
+- Build result.
+- Any remaining limitation that genuinely cannot be solved under the Spark Plan.
+- Exact manual deployment steps for Firestore Rules, Storage Rules, and Hosting, if needed.
+- Any action that requires manual Firebase Console configuration.
+
+Do not ask me to send you another review report. Do not stop after producing a plan. Implement everything possible in the existing project.
+
+---
+
+# FINAL PRIORITY
+
+The highest priority is:
+
+1. Preserve all existing production data and the real Admin account.
+2. Correct all Firestore and Storage security vulnerabilities.
+3. Make point transfer, checkout, delivery confirmation, refunds, and referrals consistent and safe.
+4. Correct purchase verification and review security.
+5. Correct seller ownership and image upload security.
+6. Complete responsive design.
+7. Ensure the entire application builds and its available tests pass.
+
+**This is the final comprehensive correction task for REFERO V2. Inspect the entire existing codebase, implement every feasible required correction, and do not merely return an audit report or recommendations.**

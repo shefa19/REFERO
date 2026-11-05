@@ -1,0 +1,50 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isValidImage() {
+      return request.resource.contentType.matches('image/(jpeg|jpg|png|webp)') &&
+             request.resource.size < 5 * 1024 * 1024; // 5 MB max limit
+    }
+
+    function isShopOwnerAndApproved(shopId) {
+      let shopPath = /databases/(default)/documents/shops/$(shopId);
+      return firestore.exists(shopPath) &&
+             firestore.get(shopPath).data.ownerId == request.auth.uid &&
+             firestore.get(shopPath).data.status == 'approved';
+    }
+
+    function isAdmin() {
+      let userPath = /databases/(default)/documents/users/$(request.auth.uid);
+      return firestore.exists(userPath) &&
+             firestore.get(userPath).data.role == 'admin';
+    }
+
+    // Product Images: Publicly readable; uploaded ONLY by the authenticated owner of an approved shop (or Admin)
+    match /products/{shopId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidImage() && (isAdmin() || isShopOwnerAndApproved(shopId));
+    }
+
+    // Review Attachments: Publicly readable; uploaded strictly by the authenticated customer for their own review
+    match /reviews/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId && isValidImage();
+    }
+
+    // User profile avatars: Publicly readable; uploaded strictly by the user for their own avatar
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId && isValidImage();
+    }
+
+    // Default deny for all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -22,6 +22,8 @@ import {
   ShieldCheck,
   Store,
   AlertTriangle,
+  Send,
+  Inbox,
 } from 'lucide-react';
 
 export const CustomerDashboard: React.FC = () => {
@@ -38,6 +40,7 @@ export const CustomerDashboard: React.FC = () => {
     customerTab,
     setCustomerTab,
     submitPointTransfer,
+    requestPointsFromFriend,
     approvePointTransfer,
     rejectPointTransfer,
     confirmOrderReceived,
@@ -90,11 +93,18 @@ export const CustomerDashboard: React.FC = () => {
     }
   };
 
-  // Transfer form
+  // Transfer & Request forms
+  const [transferFormMode, setTransferFormMode] = useState<'transfer' | 'request'>('transfer');
   const [transferRecipient, setTransferRecipient] = useState('');
   const [transferAmount, setTransferAmount] = useState<number>(50);
   const [transferNote, setTransferNote] = useState('');
   const [isSubmittingTransfer, setIsSubmittingTransfer] = useState(false);
+
+  const [requestTargetEmail, setRequestTargetEmail] = useState('');
+  const [requestAmount, setRequestAmount] = useState<number>(50);
+  const [requestNote, setRequestNote] = useState('');
+  const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
+
   const [copiedReferral, setCopiedReferral] = useState(false);
 
   if (!currentUser) {
@@ -177,6 +187,27 @@ export const CustomerDashboard: React.FC = () => {
     if (res.success) {
       setTransferRecipient('');
       setTransferNote('');
+    } else {
+      showToast(res.message, 'error');
+    }
+  };
+
+  const handleCreateRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requestTargetEmail || requestAmount <= 0) {
+      showToast('Please provide a valid friend email and points amount to request.', 'error');
+      return;
+    }
+    if (requestTargetEmail.trim().toLowerCase() === currentUser.email.toLowerCase()) {
+      showToast('You cannot request points from yourself.', 'error');
+      return;
+    }
+    setIsSubmittingRequest(true);
+    const res = await requestPointsFromFriend(requestTargetEmail, requestAmount, requestNote);
+    setIsSubmittingRequest(false);
+    if (res.success) {
+      setRequestTargetEmail('');
+      setRequestNote('');
     } else {
       showToast(res.message, 'error');
     }
@@ -693,171 +724,420 @@ export const CustomerDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 5: POINT TRANSFERS */}
+      {/* TAB 5: POINT TRANSFERS & REQUESTS */}
       {activeTab === 'transfers' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* Transfer Form */}
+          {/* Transfer & Request Form Card */}
           <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-            <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-              <ArrowRightLeft className="w-4 h-4 text-[#F47B44]" />
-              <h3 className="text-sm font-bold text-[#142B4A]">Transfer Points to a Friend</h3>
+            {/* Mode Toggle Buttons */}
+            <div className="flex rounded-lg bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setTransferFormMode('transfer')}
+                className={`flex-1 py-2 px-3 rounded-md text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  transferFormMode === 'transfer'
+                    ? 'bg-[#142B4A] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Transfer Points</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTransferFormMode('request')}
+                className={`flex-1 py-2 px-3 rounded-md text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  transferFormMode === 'request'
+                    ? 'bg-[#142B4A] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Inbox className="w-3.5 h-3.5" />
+                <span>Request Points</span>
+              </button>
             </div>
 
-            <form onSubmit={handleCreateTransfer} className="space-y-3.5 text-xs">
+            {transferFormMode === 'transfer' ? (
+              /* Transfer Mode Form */
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">
-                  Recipient Email Address *
-                </label>
-                <input
-                  type="email"
-                  value={transferRecipient}
-                  onChange={(e) => setTransferRecipient(e.target.value)}
-                  placeholder="e.g. nusrat.jahan@gmail.com"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A]"
-                  required
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="font-semibold text-slate-700">Points to Transfer *</label>
-                  <span className="text-slate-500 font-mono">
-                    Balance: {formatPoints(currentUser.pointsBalance)} pts
-                  </span>
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 mb-3.5">
+                  <ArrowRightLeft className="w-4 h-4 text-[#F47B44]" />
+                  <div>
+                    <h3 className="text-sm font-bold text-[#142B4A]">Transfer Points to a Friend</h3>
+                    <p className="text-[11px] text-slate-500">Gift your earned points to any registered customer</p>
+                  </div>
                 </div>
-                <input
-                  type="number"
-                  min="1"
-                  max={currentUser.pointsBalance}
-                  value={transferAmount}
-                  onChange={(e) => setTransferAmount(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A] font-mono"
-                  required
-                />
-              </div>
 
+                <form onSubmit={handleCreateTransfer} className="space-y-3.5 text-xs">
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Recipient Email Address *
+                    </label>
+                    <input
+                      type="email"
+                      value={transferRecipient}
+                      onChange={(e) => setTransferRecipient(e.target.value)}
+                      placeholder="e.g. friend@gmail.com"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A]"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-semibold text-slate-700">Points to Transfer *</label>
+                      <span className="text-slate-500 font-mono">
+                        Available: {formatPoints(currentUser.pointsBalance)} pts
+                      </span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      max={currentUser.pointsBalance}
+                      value={transferAmount}
+                      onChange={(e) => setTransferAmount(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A] font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Short Gift Note (Optional)</label>
+                    <input
+                      type="text"
+                      value={transferNote}
+                      onChange={(e) => setTransferNote(e.target.value)}
+                      placeholder="e.g. Enjoy this loyalty bonus!"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-lg text-slate-600 text-[11px] leading-relaxed border border-slate-200/80">
+                    <strong>Bilateral Verification:</strong> A pending transfer is generated. Points are debited from your account and credited to your friend only when they click Accept.
+                  </div>
+
+                  {currentUser.pointsBalance <= 0 && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
+                      <span className="font-semibold">Insufficient points:</span> You currently have 0 spendable REFERO Points.
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingTransfer || currentUser.pointsBalance <= 0 || currentUser.pointsBalance < transferAmount}
+                    className="w-full py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+                  >
+                    <span>{isSubmittingTransfer ? 'Sending Transfer...' : 'Send Points Transfer'}</span>
+                  </button>
+                </form>
+              </div>
+            ) : (
+              /* Request Mode Form */
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Short Gift Note (Optional)</label>
-                <input
-                  type="text"
-                  value={transferNote}
-                  onChange={(e) => setTransferNote(e.target.value)}
-                  placeholder="e.g. Thanks for the spice recommendation!"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden"
-                />
-              </div>
-
-              <div className="p-3 bg-slate-50 rounded-lg text-slate-600 text-[11px] leading-relaxed border border-slate-200/80">
-                <strong>Transfer Security:</strong> When you submit, a pending request is generated. The recipient must accept the transfer for points to be authoritatively debited and credited.
-              </div>
-
-              {currentUser.pointsBalance <= 0 && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
-                  <span className="font-semibold">Insufficient points balance:</span> You currently have 0 spendable REFERO Points. You must earn or hold points to transfer to another user.
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 mb-3.5">
+                  <Inbox className="w-4 h-4 text-[#F47B44]" />
+                  <div>
+                    <h3 className="text-sm font-bold text-[#142B4A]">Request Points from a Friend</h3>
+                    <p className="text-[11px] text-slate-500">Ask a friend or family member to transfer points</p>
+                  </div>
                 </div>
-              )}
 
-              <button
-                type="submit"
-                disabled={isSubmittingTransfer || currentUser.pointsBalance <= 0 || currentUser.pointsBalance < transferAmount}
-                className="w-full py-2.5 bg-[#142B4A] hover:bg-[#1E3A5F] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <span>{isSubmittingTransfer ? 'Sending Request...' : 'Submit Transfer Request'}</span>
-              </button>
-            </form>
+                <form onSubmit={handleCreateRequest} className="space-y-3.5 text-xs">
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Friend's Email Address *
+                    </label>
+                    <input
+                      type="email"
+                      value={requestTargetEmail}
+                      onChange={(e) => setRequestTargetEmail(e.target.value)}
+                      placeholder="e.g. friend@gmail.com"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A]"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-semibold text-slate-700">Points Needed *</label>
+                      <span className="text-slate-500 font-mono">
+                        Your balance: {formatPoints(currentUser.pointsBalance)} pts
+                      </span>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10000"
+                      value={requestAmount}
+                      onChange={(e) => setRequestAmount(Number(e.target.value))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden focus:border-[#142B4A] font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Reason / Note (Optional)</label>
+                    <input
+                      type="text"
+                      value={requestNote}
+                      onChange={(e) => setRequestNote(e.target.value)}
+                      placeholder="e.g. Need 50 points to complete grocery order!"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div className="p-3 bg-blue-50/70 rounded-lg text-blue-900 text-[11px] leading-relaxed border border-blue-200/80">
+                    <strong>How Point Requests Work:</strong> Your friend will receive an in-app notification and an Incoming Request. When they review and click "Accept & Send", their points will be debited and credited directly to you.
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingRequest || requestAmount <= 0}
+                    className="w-full py-2.5 bg-[#F47B44] hover:bg-[#E06A33] text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+                  >
+                    <span>{isSubmittingRequest ? 'Sending Request...' : 'Send Point Request'}</span>
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
 
-          {/* Incoming & Outgoing Requests */}
+          {/* Incoming & Outgoing Requests Column */}
           <div className="lg:col-span-7 space-y-6">
-            {/* Incoming Requests */}
-            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-              <h3 className="text-sm font-bold text-[#142B4A]">
-                Incoming Point Transfers (Awaiting Your Decision)
-              </h3>
+            {/* 1. Incoming Point Transfers (Offers from others to you) */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h3 className="text-sm font-bold text-[#142B4A] flex items-center gap-2">
+                  <ArrowDownLeft className="w-4 h-4 text-emerald-600" />
+                  <span>Incoming Point Transfers (Gifts to You)</span>
+                </h3>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                  {incomingTransfers.filter((t) => (!t.requestType || t.requestType === 'transfer') && t.status === 'pending').length} pending
+                </span>
+              </div>
 
-              {incomingTransfers.length === 0 ? (
-                <p className="text-xs text-slate-500 py-3">No incoming transfer requests.</p>
+              {incomingTransfers.filter((t) => !t.requestType || t.requestType === 'transfer').length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">No incoming point transfers from friends.</p>
               ) : (
                 <div className="divide-y divide-slate-100 text-xs">
-                  {incomingTransfers.map((req) => (
-                    <div key={req.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div>
-                        <p className="font-bold text-slate-800">
-                          {req.senderName} ({req.senderEmail})
-                        </p>
-                        <p className="text-slate-500 text-[11px] mt-0.5">
-                          Amount: <strong className="text-[#F47B44] font-mono">{req.points} pts</strong> {req.note && `· "${req.note}"`}
-                        </p>
-                      </div>
-
-                      {req.status === 'pending' ? (
-                        <div className="flex items-center gap-2 self-start sm:self-auto">
-                          <button
-                            type="button"
-                            onClick={() => handleAcceptTransfer(req.id)}
-                            disabled={Boolean(processingTransfers[req.id])}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5"
-                          >
-                            {processingTransfers[req.id] ? (
-                              <span className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
-                                <span>Processing...</span>
-                              </span>
-                            ) : (
-                              <span>Accept</span>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeclineTransfer(req.id)}
-                            disabled={Boolean(processingTransfers[req.id])}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
-                          >
-                            <span>Decline</span>
-                          </button>
+                  {incomingTransfers
+                    .filter((t) => !t.requestType || t.requestType === 'transfer')
+                    .map((req) => (
+                      <div key={req.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <p className="font-bold text-slate-800">
+                            {req.senderName} ({req.senderEmail})
+                          </p>
+                          <p className="text-slate-500 text-[11px] mt-0.5">
+                            Gifting you: <strong className="text-emerald-700 font-mono font-bold">+{req.points} pts</strong> {req.note && `· "${req.note}"`}
+                          </p>
+                          <span className="text-[10px] text-slate-400 font-mono">{formatDateTime(req.createdAt)}</span>
                         </div>
-                      ) : (
-                        <span
-                          className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded self-start sm:self-auto ${
-                            req.status === 'accepted' || req.status === 'approved'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : req.status === 'rejected'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                              : 'bg-slate-100 text-slate-600 border border-slate-200'
-                          }`}
-                        >
-                          {req.status}
-                        </span>
-                      )}
-                    </div>
-                  ))}
+
+                        {req.status === 'pending' ? (
+                          <div className="flex items-center gap-2 self-start sm:self-auto">
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptTransfer(req.id)}
+                              disabled={Boolean(processingTransfers[req.id])}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5 shadow-xs"
+                            >
+                              {processingTransfers[req.id] ? (
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-2.5 h-2.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+                                  <span>Accepting...</span>
+                                </span>
+                              ) : (
+                                <span>Accept (+{req.points} pts)</span>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeclineTransfer(req.id)}
+                              disabled={Boolean(processingTransfers[req.id])}
+                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
+                            >
+                              <span>Decline</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded self-start sm:self-auto ${
+                              req.status === 'accepted' || req.status === 'approved'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : req.status === 'rejected'
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}
+                          >
+                            {req.status}
+                          </span>
+                        )}
+                      </div>
+                    ))}
                 </div>
               )}
             </div>
 
-            {/* Outgoing Requests */}
-            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-              <h3 className="text-sm font-bold text-[#142B4A]">Outgoing Point Requests</h3>
-              {outgoingTransfers.length === 0 ? (
-                <p className="text-xs text-slate-500 py-3">No outgoing transfer requests.</p>
+            {/* 2. Incoming Point Requests (Friends asking YOU for points) */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h3 className="text-sm font-bold text-[#142B4A] flex items-center gap-2">
+                  <Inbox className="w-4 h-4 text-[#F47B44]" />
+                  <span>Incoming Point Requests (Friends Asking You for Points)</span>
+                </h3>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-100">
+                  {incomingTransfers.filter((t) => t.requestType === 'request' && t.status === 'pending').length} pending
+                </span>
+              </div>
+
+              {incomingTransfers.filter((t) => t.requestType === 'request').length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">No incoming point requests from friends.</p>
               ) : (
                 <div className="divide-y divide-slate-100 text-xs">
-                  {outgoingTransfers.map((req) => (
-                    <div key={req.id} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                      <div>
-                        <span className="font-medium text-slate-800">To: {req.recipientEmail}</span>
-                        <span className="text-slate-400 text-[11px] ml-2 font-mono">
-                          {formatDate(req.createdAt)}
-                        </span>
+                  {incomingTransfers
+                    .filter((t) => t.requestType === 'request')
+                    .map((req) => {
+                      const hasEnough = currentUser.pointsBalance >= req.points;
+                      return (
+                        <div key={req.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <p className="font-bold text-slate-800">
+                              {req.senderName} ({req.senderEmail})
+                            </p>
+                            <p className="text-slate-500 text-[11px] mt-0.5">
+                              Requesting: <strong className="text-[#F47B44] font-mono font-bold">{req.points} pts</strong> {req.note && `· "${req.note}"`}
+                            </p>
+                            <span className="text-[10px] text-slate-400 font-mono">{formatDateTime(req.createdAt)}</span>
+                          </div>
+
+                          {req.status === 'pending' ? (
+                            <div className="flex items-center gap-2 self-start sm:self-auto">
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptTransfer(req.id)}
+                                disabled={Boolean(processingTransfers[req.id]) || !hasEnough}
+                                title={!hasEnough ? 'Insufficient balance to fulfill this request' : 'Accept and send points'}
+                                className="px-3 py-1.5 bg-[#142B4A] hover:bg-[#1E3A5F] disabled:opacity-50 text-white rounded-md font-semibold cursor-pointer transition-colors text-xs flex items-center gap-1.5 shadow-xs"
+                              >
+                                {processingTransfers[req.id] ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+                                    <span>Sending...</span>
+                                  </span>
+                                ) : (
+                                  <span>{hasEnough ? `Accept & Send (${req.points} pts)` : 'Insufficient Balance'}</span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeclineTransfer(req.id)}
+                                disabled={Boolean(processingTransfers[req.id])}
+                                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-md font-semibold cursor-pointer transition-colors text-xs"
+                              >
+                                <span>Decline</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 uppercase text-[10px] font-bold rounded self-start sm:self-auto ${
+                                req.status === 'accepted' || req.status === 'approved'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : req.status === 'rejected'
+                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              {req.status}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+
+            {/* 3. Outgoing Point Transfers (Transfers you initiated) */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+              <h3 className="text-sm font-bold text-[#142B4A] flex items-center gap-2 pb-2 border-b border-slate-100">
+                <ArrowUpRight className="w-4 h-4 text-[#142B4A]" />
+                <span>Outgoing Point Transfers (Gifts Sent by You)</span>
+              </h3>
+
+              {outgoingTransfers.filter((t) => !t.requestType || t.requestType === 'transfer').length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">No outgoing point transfers.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 text-xs">
+                  {outgoingTransfers
+                    .filter((t) => !t.requestType || t.requestType === 'transfer')
+                    .map((req) => (
+                      <div key={req.id} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                        <div>
+                          <span className="font-medium text-slate-800">To: {req.recipientEmail}</span>
+                          <span className="text-slate-400 text-[11px] ml-2 font-mono">
+                            {formatDate(req.createdAt)}
+                          </span>
+                          {req.note && <p className="text-[11px] text-slate-500 italic">"{req.note}"</p>}
+                        </div>
+                        <div className="flex items-center gap-2 font-mono self-start sm:self-auto">
+                          <span className="font-bold text-[#142B4A]">{req.points} pts</span>
+                          <span
+                            className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded ${
+                              req.status === 'accepted' || req.status === 'approved'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : req.status === 'pending'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {req.status}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 font-mono self-start sm:self-auto">
-                        <span className="font-bold text-[#142B4A]">{req.points} pts</span>
-                        <span className="px-2 py-0.5 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-600">
-                          {req.status}
-                        </span>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            {/* 4. Outgoing Point Requests (Requests you sent to friends) */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+              <h3 className="text-sm font-bold text-[#142B4A] flex items-center gap-2 pb-2 border-b border-slate-100">
+                <Inbox className="w-4 h-4 text-[#F47B44]" />
+                <span>Outgoing Point Requests (You Asked Friends for Points)</span>
+              </h3>
+
+              {outgoingTransfers.filter((t) => t.requestType === 'request').length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">No outgoing point requests sent.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 text-xs">
+                  {outgoingTransfers
+                    .filter((t) => t.requestType === 'request')
+                    .map((req) => (
+                      <div key={req.id} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                        <div>
+                          <span className="font-medium text-slate-800">Requested from: {req.recipientEmail}</span>
+                          <span className="text-slate-400 text-[11px] ml-2 font-mono">
+                            {formatDate(req.createdAt)}
+                          </span>
+                          {req.note && <p className="text-[11px] text-slate-500 italic">"{req.note}"</p>}
+                        </div>
+                        <div className="flex items-center gap-2 font-mono self-start sm:self-auto">
+                          <span className="font-bold text-[#F47B44]">+{req.points} pts</span>
+                          <span
+                            className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded ${
+                              req.status === 'accepted' || req.status === 'approved'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : req.status === 'pending'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {req.status === 'accepted' || req.status === 'approved' ? 'Fulfilled' : req.status}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               )}
             </div>

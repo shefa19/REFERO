@@ -43,6 +43,7 @@ export const ShopkeeperDashboard: React.FC = () => {
     addProduct,
     updateProduct,
     deleteProduct,
+    seedShopProducts,
     updateOrderItemStatus,
     updateShopPolicies,
     showToast,
@@ -53,6 +54,7 @@ export const ShopkeeperDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'orders' | 'settings'>('overview');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [isSeedingCatalog, setIsSeedingCatalog] = useState(false);
 
   // Active shopkeeper's shop
   const fallbackShop: Shop = {
@@ -808,88 +810,142 @@ export const ShopkeeperDashboard: React.FC = () => {
       {/* TAB 2: CATALOGUE MANAGEMENT */}
       {activeTab === 'products' && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-3">
             <div>
               <h3 className="text-sm font-bold text-[#142B4A]">Product Catalogue</h3>
               <p className="text-xs text-slate-500">Configure prices, inventory stock, and point bonuses</p>
             </div>
-            <button
-              onClick={handleOpenAdd}
-              className="px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] flex items-center gap-1.5"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Product</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsSeedingCatalog(true);
+                  try {
+                    await seedShopProducts(myShop.id, myShop.name);
+                  } finally {
+                    setIsSeedingCatalog(false);
+                  }
+                }}
+                disabled={isSeedingCatalog}
+                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                title="Populate 10 rich Bangladeshi grocery products with photos and prices"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{isSeedingCatalog ? 'Adding 10 Products...' : 'Seed 10 Sample Products'}</span>
+              </button>
+              <button
+                onClick={handleOpenAdd}
+                className="px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Product</span>
+              </button>
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                <tr>
-                  <th className="py-2.5 px-3">Product</th>
-                  <th className="py-2.5 px-3">Category</th>
-                  <th className="py-2.5 px-3">Price</th>
-                  <th className="py-2.5 px-3">Stock</th>
-                  <th className="py-2.5 px-3">Points Bonus</th>
-                  <th className="py-2.5 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {myProducts.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-50/60">
-                    <td className="py-3 px-3 flex items-center gap-3">
-                      <img
-                        src={p.images[0]}
-                        alt={p.title}
-                        className="w-10 h-10 rounded-md object-cover border border-slate-200 shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
-                      <span className="font-semibold text-slate-800 line-clamp-1 max-w-[200px]">
-                        {p.title}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-slate-600">{p.category}</td>
-                    <td className="py-3 px-3 font-mono font-bold text-slate-800">
-                      {formatBDT(p.price)}
-                    </td>
-                    <td className="py-3 px-3 font-mono">
-                      <span className={p.stock <= 5 ? 'text-amber-600 font-bold' : 'text-slate-700'}>
-                        {p.stock} units
-                      </span>
-                    </td>
-                    <td className="py-3 px-3">
-                      {p.pointsEarned > 0 ? (
-                        <span className="text-[#F47B44] font-semibold flex items-center gap-1">
-                          <Sparkles className="w-3 h-3" />
-                          <span>+{p.pointsEarned} pts</span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">Platform 5%</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => handleOpenEdit(p)}
-                          className="p-1.5 text-slate-500 hover:text-[#142B4A] hover:bg-slate-100 rounded-md"
-                          title="Edit"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => deleteProduct(p.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
+          {myProducts.length === 0 ? (
+            <div className="text-center py-12 px-4 bg-slate-50 rounded-xl border border-dashed border-slate-300 space-y-3">
+              <Package className="w-12 h-12 text-slate-400 mx-auto" />
+              <h4 className="text-sm font-bold text-[#142B4A]">No products listed in your storefront yet</h4>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                Get started quickly by populating 10 high-demand Bangladeshi grocery items (Mustard Oil, Sundarban Honey, Ghee, Chinigura Rice, Sylhet Tea, and Spices) or manually add your own products.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsSeedingCatalog(true);
+                    try {
+                      await seedShopProducts(myShop.id, myShop.name);
+                    } finally {
+                      setIsSeedingCatalog(false);
+                    }
+                  }}
+                  disabled={isSeedingCatalog}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-2 shadow-xs cursor-pointer transition-colors"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>{isSeedingCatalog ? 'Populating Storefront...' : 'Seed 10 Sample Storefront Products'}</span>
+                </button>
+                <button
+                  onClick={handleOpenAdd}
+                  className="px-4 py-2 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Custom Product</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Product</th>
+                    <th className="py-2.5 px-3">Category</th>
+                    <th className="py-2.5 px-3">Price</th>
+                    <th className="py-2.5 px-3">Stock</th>
+                    <th className="py-2.5 px-3">Points Bonus</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {myProducts.map((p) => (
+                    <tr key={p.id} className="hover:bg-slate-50/60">
+                      <td className="py-3 px-3 flex items-center gap-3">
+                        <img
+                          src={p.images[0]}
+                          alt={p.title}
+                          className="w-10 h-10 rounded-md object-cover border border-slate-200 shrink-0"
+                          referrerPolicy="no-referrer"
+                        />
+                        <span className="font-semibold text-slate-800 line-clamp-1 max-w-[200px]">
+                          {p.title}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-slate-600">{p.category}</td>
+                      <td className="py-3 px-3 font-mono font-bold text-slate-800">
+                        {formatBDT(p.price)}
+                      </td>
+                      <td className="py-3 px-3 font-mono">
+                        <span className={p.stock <= 5 ? 'text-amber-600 font-bold' : 'text-slate-700'}>
+                          {p.stock} units
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        {p.pointsEarned > 0 ? (
+                          <span className="text-[#F47B44] font-semibold flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            <span>+{p.pointsEarned} pts</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">Platform 5%</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleOpenEdit(p)}
+                            className="p-1.5 text-slate-500 hover:text-[#142B4A] hover:bg-slate-100 rounded-md"
+                            title="Edit"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => deleteProduct(p.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
