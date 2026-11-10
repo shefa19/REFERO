@@ -337,6 +337,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         // 2. Load shops
+        let loadedShops: Shop[] = [];
         try {
           const shopsQuery = currentUser?.role === 'admin'
             ? collection(activeDb, 'shops')
@@ -344,7 +345,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const shopsSnap = await getDocs(shopsQuery);
           if (isMounted) {
             if (shopsSnap.docs.length > 0) {
-              const loadedShops = shopsSnap.docs.map((docSnap) => ({
+              loadedShops = shopsSnap.docs.map((docSnap) => ({
                 id: docSnap.id,
                 ...docSnap.data(),
               })) as Shop[];
@@ -400,26 +401,67 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         // 3. Load orders
         if (currentUser) {
           try {
-            const ordersQuery = currentUser.role === 'admin'
-              ? collection(activeDb, 'orders')
-              : query(collection(activeDb, 'orders'), where('customerId', '==', currentUser.id));
-            const ordersSnap = await getDocs(ordersQuery);
+            const ordersMap = new Map<string, Order>();
+            const sanitizeDoc = (docSnap: any) => {
+              const oData = docSnap.data();
+              const sanitizedItems = Array.isArray(oData.items)
+                ? oData.items.map((it: OrderItem) => ({
+                    ...it,
+                    image: resolveProductImage(it.image),
+                  }))
+                : [];
+              return {
+                id: docSnap.id,
+                ...oData,
+                items: sanitizedItems,
+              } as Order;
+            };
+
+            if (currentUser.role === 'admin') {
+              const ordersSnap = await getDocs(collection(activeDb, 'orders'));
+              ordersSnap.docs.forEach((d) => ordersMap.set(d.id, sanitizeDoc(d)));
+            } else {
+              // A. Fetch orders placed by this user as customer
+              try {
+                const custQuery = query(collection(activeDb, 'orders'), where('customerId', '==', currentUser.id));
+                const custSnap = await getDocs(custQuery);
+                custSnap.docs.forEach((d) => ordersMap.set(d.id, sanitizeDoc(d)));
+              } catch (cErr) {
+                console.warn('Customer orders fetch note:', cErr);
+              }
+
+              // B. If user is a shopkeeper or owns a shop, fetch orders belonging to their shop
+              const allKnownShops: Shop[] = loadedShops.length > 0 ? loadedShops : shops;
+              const userShop = allKnownShops.find((s: Shop) => s.ownerId === currentUser.id || (currentUser.shopId && s.id === currentUser.shopId));
+              const targetShopId = currentUser.shopId || userShop?.id;
+
+              if (targetShopId) {
+                try {
+                  const shopIdsQuery = query(collection(activeDb, 'orders'), where('shopIds', 'array-contains', targetShopId));
+                  const shopIdsSnap = await getDocs(shopIdsQuery);
+                  shopIdsSnap.docs.forEach((d) => ordersMap.set(d.id, sanitizeDoc(d)));
+                } catch {}
+
+                try {
+                  const shopIdQuery = query(collection(activeDb, 'orders'), where('shopId', '==', targetShopId));
+                  const shopIdSnap = await getDocs(shopIdQuery);
+                  shopIdSnap.docs.forEach((d) => ordersMap.set(d.id, sanitizeDoc(d)));
+                } catch {}
+              }
+
+              // C. Multi-vendor seller lookup by UID
+              try {
+                const sellerQuery = query(collection(activeDb, 'orders'), where('sellerUids', 'array-contains', currentUser.id));
+                const sellerSnap = await getDocs(sellerQuery);
+                sellerSnap.docs.forEach((d) => ordersMap.set(d.id, sanitizeDoc(d)));
+              } catch {}
+            }
+
             if (isMounted) {
-              if (ordersSnap.docs.length > 0) {
-                const loadedOrders = ordersSnap.docs.map((docSnap) => {
-                  const oData = docSnap.data();
-                  const sanitizedItems = Array.isArray(oData.items)
-                    ? oData.items.map((it: OrderItem) => ({
-                        ...it,
-                        image: resolveProductImage(it.image),
-                      }))
-                    : [];
-                  return {
-                    id: docSnap.id,
-                    ...oData,
-                    items: sanitizedItems,
-                  };
-                }) as Order[];
+              if (ordersMap.size > 0) {
+                const loadedOrders = Array.from(ordersMap.values()).sort(
+                  (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                );
                 setOrders(loadedOrders);
                 setDataSources((prev) => ({ ...prev, orders: 'live' }));
               } else {
@@ -1141,20 +1183,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const discountFromPoints = pointsToBdt(orderData.pointsToUse, pointsConfig.pointsToBdtRate);
     const totalAmount = Math.max(0, subtotal + deliveryFee - discountFromPoints);
 
-    const orderItems: OrderItem[] = cart.map((item) => ({
-      productId: item.product.id,
-      title: item.product.title,
-      price: item.product.price,
-      quantity: item.quantity,
-      image: resolveProductImage(item.product.images[0]),
-      shopId: item.product.shopId,
-      shopName: item.product.shopName,
-      unit: item.product.unit,
-      pointsEarnedPerUnit: item.product.pointsEarned,
-    }));
+    const orderItems: OrderItem[] = cart.map((item) => {
+      const parentShop = shops.find((s) => s.id === item.product.shopId);
+      return {
+        productId: item.product.id,
+        title: item.product.title,
+        price: item.product.price,
+        quantity: item.quantity,
+        image: resolveProductImage(item.product.images?.[0] || ''),
+        shopId: item.product.shopId,
+        shopName: item.product.shopName || parentShop?.name || 'REFERO Vendor',
+        unit: item.product.unit,
+        pointsEarnedPerUnit: item.product.pointsEarned,
+      };
+    });
 
     // Calculate earned points following strict business rules
     const pointsEarned = calculateEarnedPoints(orderItems, pointsConfig, discountFromPoints);
+
+    const uniqueShopIds = Array.from(new Set(orderItems.map((it) => it.shopId).filter(Boolean)));
+    const primaryShopId = uniqueShopIds[0] || '';
+    const primaryShop = shops.find((s) => s.id === primaryShopId);
+    const sellerUids = Array.from(
+      new Set(
+        shops
+          .filter((s) => uniqueShopIds.includes(s.id) && s.ownerId)
+          .map((s) => s.ownerId)
+          .filter(Boolean)
+      )
+    );
 
     const newOrder: Order = {
       id: `ord_${Date.now()}`,
@@ -1178,7 +1235,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       pointsCredited: false, // will be credited upon customer confirmation
       referralRewardCredited: false,
       productIds: orderItems.map((it) => it.productId),
-      shopIds: Array.from(new Set(orderItems.map((it) => it.shopId))),
+      shopId: primaryShopId,
+      shopName: primaryShop?.name || orderItems[0]?.shopName || '',
+      shopIds: uniqueShopIds,
+      sellerUids,
+      sellerUid: sellerUids[0] || '',
       createdAt: new Date().toISOString(),
     };
 
@@ -2452,9 +2513,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Authorization check: Only Admin or the Seller of the order's shop can change status
     const isAdminUser = currentUser?.role === 'admin';
-    const isOrderSeller = currentUser?.role === 'shopkeeper' && currentUser.shopId && (
-      (targetOrder as any).shopId === currentUser.shopId ||
-      targetOrder.items.some((it) => it.shopId === currentUser.shopId)
+    const userShopId = currentUser?.shopId || shops.find((s) => s.ownerId === currentUser?.id)?.id;
+    const isOrderSeller = (currentUser?.role === 'shopkeeper' || Boolean(userShopId)) && (
+      (userShopId && (targetOrder as any).shopId === userShopId) ||
+      (userShopId && targetOrder.shopIds?.includes(userShopId)) ||
+      (userShopId && targetOrder.items.some((it) => it.shopId === userShopId)) ||
+      Boolean(targetOrder.sellerUids?.includes(currentUser?.id || '')) ||
+      targetOrder.sellerUid === currentUser?.id
     );
 
     if (!isAdminUser && !isOrderSeller) {
