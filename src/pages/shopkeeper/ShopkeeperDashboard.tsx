@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT, formatPoints, formatDate } from '../../utils/formatters';
-import { Product, Shop } from '../../types';
+import { Product, Shop, Order, OrderItem } from '../../types';
 import {
   Store,
   Package,
@@ -29,7 +29,7 @@ import {
   Check,
 } from 'lucide-react';
 import { db, isFirebaseConfigured, storage } from '../../services/firebase/config';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { IMAGE_ASSETS, resolveProductImage } from '../../utils/imageAssets';
 
@@ -213,10 +213,129 @@ export const ShopkeeperDashboard: React.FC = () => {
     }
   };
 
-  // Orders that contain this shop's items
-  const myShopOrders = orders.filter((o) =>
-    o.items.some((it) => it.shopId === myShop.id)
-  );
+  // Real-time Firestore orders for this shop
+  const [realtimeOrders, setRealtimeOrders] = useState<Order[]>([]);
+
+  // Real-time Firestore order listener for this shop
+  useEffect(() => {
+    if (!isFirebaseConfigured() || !db || !myShop?.id) return;
+
+    const activeDb = db;
+    const unsubscribers: (() => void)[] = [];
+
+    const sanitizeOrderDoc = (docSnap: any): Order => {
+      const oData = docSnap.data();
+      const sanitizedItems = Array.isArray(oData.items)
+        ? oData.items.map((it: OrderItem) => ({
+            ...it,
+            image: resolveProductImage(it.image),
+          }))
+        : [];
+      return {
+        id: docSnap.id,
+        ...oData,
+        items: sanitizedItems,
+      } as Order;
+    };
+
+    try {
+      // 1. Listen for orders containing this shop in shopIds array
+      const qShopIds = query(
+        collection(activeDb, 'orders'),
+        where('shopIds', 'array-contains', myShop.id)
+      );
+
+      const unsubShopIds = onSnapshot(
+        qShopIds,
+        (snap) => {
+          const fetchedOrders = snap.docs.map(sanitizeOrderDoc);
+          setRealtimeOrders((prev) => {
+            const map = new Map<string, Order>();
+            prev.forEach((o) => map.set(o.id, o));
+            fetchedOrders.forEach((o) => map.set(o.id, o));
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+          });
+        },
+        (err) => {
+          console.warn('Real-time orders shopIds listener note:', err);
+        }
+      );
+      unsubscribers.push(unsubShopIds);
+
+      // 2. Also listen for orders with direct primary shopId matching this shop
+      const qShopId = query(
+        collection(activeDb, 'orders'),
+        where('shopId', '==', myShop.id)
+      );
+
+      const unsubShopId = onSnapshot(
+        qShopId,
+        (snap) => {
+          const fetchedOrders = snap.docs.map(sanitizeOrderDoc);
+          setRealtimeOrders((prev) => {
+            const map = new Map<string, Order>();
+            prev.forEach((o) => map.set(o.id, o));
+            fetchedOrders.forEach((o) => map.set(o.id, o));
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+          });
+        },
+        (err) => {
+          console.warn('Real-time orders shopId listener note:', err);
+        }
+      );
+      unsubscribers.push(unsubShopId);
+
+      // 3. Multi-vendor seller lookup if currentUser ID is recorded
+      if (currentUser?.id) {
+        const qSeller = query(
+          collection(activeDb, 'orders'),
+          where('sellerUids', 'array-contains', currentUser.id)
+        );
+        const unsubSeller = onSnapshot(
+          qSeller,
+          (snap) => {
+            const fetchedOrders = snap.docs.map(sanitizeOrderDoc);
+            setRealtimeOrders((prev) => {
+              const map = new Map<string, Order>();
+              prev.forEach((o) => map.set(o.id, o));
+              fetchedOrders.forEach((o) => map.set(o.id, o));
+              return Array.from(map.values()).sort(
+                (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+              );
+            });
+          },
+          () => {}
+        );
+        unsubscribers.push(unsubSeller);
+      }
+    } catch (e) {
+      console.warn('Error setting up real-time orders listener:', e);
+    }
+
+    return () => {
+      unsubscribers.forEach((unsub) => unsub());
+    };
+  }, [myShop?.id, currentUser?.id]);
+
+  // Combine real-time Firestore orders with StoreContext orders (deduplicating by order ID)
+  const allOrdersMap = new Map<string, Order>();
+  orders.forEach((o) => allOrdersMap.set(o.id, o));
+  realtimeOrders.forEach((o) => allOrdersMap.set(o.id, o));
+  const combinedAllOrders = Array.from(allOrdersMap.values());
+
+  // Orders that belong to or contain this shop's items
+  const myShopOrders = combinedAllOrders
+    .filter((o) =>
+      o.shopId === myShop.id ||
+      (Array.isArray(o.shopIds) && o.shopIds.includes(myShop.id)) ||
+      (Array.isArray(o.items) && o.items.some((it) => it.shopId === myShop.id)) ||
+      (currentUser?.id && (o.sellerUid === currentUser.id || Boolean(o.sellerUids?.includes(currentUser.id))))
+    )
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const totalRevenue = myShopOrders
     .filter((o) => o.orderStatus !== 'cancelled' && o.orderStatus !== 'refunded')

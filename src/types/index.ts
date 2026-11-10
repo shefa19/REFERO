@@ -146,7 +146,11 @@ export interface Order {
   cancelReason?: string;
   refundReason?: string;
   productIds?: string[];
+  shopId?: string;
+  shopName?: string;
   shopIds?: string[];
+  sellerUids?: string[];
+  sellerUid?: string;
   confirmedBy?: 'customer' | 'admin';
 }
 
