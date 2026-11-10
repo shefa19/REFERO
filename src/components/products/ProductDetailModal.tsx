@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatBDT, formatPoints, formatDate } from '../../utils/formatters';
@@ -35,6 +35,7 @@ export const ProductDetailModal: React.FC = () => {
     products,
     reviews,
     navigateTo,
+    closeProductModal,
     addToCart,
     openCartDrawer,
     openAuthModal,
@@ -61,6 +62,17 @@ export const ProductDetailModal: React.FC = () => {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
+
+  // Close modal on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeProductModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [closeProductModal]);
 
   if (currentView !== 'product_detail' || !selectedProductId) return null;
 
@@ -97,7 +109,47 @@ export const ProductDetailModal: React.FC = () => {
     navigateTo('checkout');
   };
 
-  const handleReviewFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressImageToDataUrl = (file: File, maxDim = 400, quality = 0.7): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(e.target?.result as string);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          let dataUrl = canvas.toDataURL('image/webp', quality);
+          if (!dataUrl.startsWith('data:image/webp')) {
+            dataUrl = canvas.toDataURL('image/jpeg', quality);
+          }
+          resolve(dataUrl);
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleReviewFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -113,11 +165,17 @@ export const ProductDetailModal: React.FC = () => {
     }
 
     setSelectedReviewFile(file);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setReviewImagePreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      // Compress to lightweight thumbnail (< 50KB) for free-plan compatibility
+      const compressed = await compressImageToDataUrl(file);
+      setReviewImagePreview(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReviewImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleRemoveReviewPhoto = () => {
@@ -226,7 +284,7 @@ export const ProductDetailModal: React.FC = () => {
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/60 backdrop-blur-xs"
-        onClick={() => navigateTo('home')}
+        onClick={closeProductModal}
       />
 
       <div className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full z-10 border border-slate-200 overflow-hidden max-h-[94vh] flex flex-col">
@@ -234,7 +292,7 @@ export const ProductDetailModal: React.FC = () => {
         <div className="p-3 sm:px-6 sm:py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
           <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs text-slate-500 overflow-hidden truncate">
             <span
-              onClick={() => navigateTo('home')}
+              onClick={closeProductModal}
               className="hover:underline cursor-pointer shrink-0"
             >
               Marketplace
@@ -253,7 +311,7 @@ export const ProductDetailModal: React.FC = () => {
           </div>
 
           <button
-            onClick={() => navigateTo('home')}
+            onClick={closeProductModal}
             className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition-colors cursor-pointer shrink-0"
             aria-label="Close"
           >
@@ -692,17 +750,7 @@ export const ProductDetailModal: React.FC = () => {
                               </button>
                             </div>
                           </div>
-                        ) : (
-                          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
-                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-semibold">Review Eligibility: Delivered Orders Only</p>
-                              <p className="text-[11px] text-amber-800 mt-0.5">
-                                {eligibility.reason || 'You can review this product after your order has arrived and been marked delivered.'}
-                              </p>
-                            </div>
-                          </div>
-                        )
+                        ) : null
                       ) : (
                         <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
                           <span className="text-slate-600">
@@ -729,18 +777,7 @@ export const ProductDetailModal: React.FC = () => {
                           productReviews.map((r) => (
                             <div key={r.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/90 space-y-1.5">
                               <div className="flex items-center justify-between text-xs">
-                                <div className="flex items-center gap-2">
-                                  <strong className="text-slate-800">{r.customerName}</strong>
-                                  {r.isDemo ? (
-                                    <span className="text-[10px] text-blue-800 bg-blue-100/70 px-1.5 py-0.5 rounded font-semibold flex items-center gap-1 border border-blue-200/60">
-                                      <Check className="w-2.5 h-2.5" /> Demo Review
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded font-semibold flex items-center gap-1 border border-emerald-200/60">
-                                      <Check className="w-2.5 h-2.5" /> Verified Purchase
-                                    </span>
-                                  )}
-                                </div>
+                                <strong className="text-slate-800">{r.customerName}</strong>
                                 <div className="flex items-center gap-1 text-amber-500">
                                   {Array.from({ length: 5 }).map((_, i) => (
                                     <Star

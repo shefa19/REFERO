@@ -94,6 +94,7 @@ service cloud.firestore {
     function isVerifiedCheckoutRedemption(userId) {
       let orderId = request.resource.data.lastOrderRedemptionId;
       let orderRef = /databases/$(database)/documents/orders/$(orderId);
+      let curBalance = ('pointsBalance' in resource.data) ? resource.data.pointsBalance : (('points' in resource.data) ? resource.data.points : 0);
       return isOwner(userId) &&
         orderId is string &&
         existsAfter(orderRef) &&
@@ -101,7 +102,7 @@ service cloud.firestore {
         getAfter(orderRef).data.pointsUsed > 0 &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pointsBalance', 'points', 'updatedAt', 'lastOrderRedemptionId']) &&
         request.resource.data.role == resource.data.role &&
-        request.resource.data.pointsBalance == resource.data.pointsBalance - getAfter(orderRef).data.pointsUsed &&
+        request.resource.data.pointsBalance == curBalance - getAfter(orderRef).data.pointsUsed &&
         request.resource.data.pointsBalance >= 0;
     }
 
@@ -228,6 +229,7 @@ service cloud.firestore {
 
       // Product Security: Sellers cannot change shopId, rating, reviewCount, or createdAt.
       // Updates are restricted strictly to legitimate product catalog fields.
+      // Customers are authorized to decrement inventory stock during order checkout.
       allow update: if isAdmin() || (
         isShopOwner(resource.data.shopId) &&
         isApprovedShop(resource.data.shopId) &&
@@ -242,6 +244,13 @@ service cloud.firestore {
           'pointsEarned', 'pointPrice', 'canRedeemWithPoints', 'tags',
           'updatedAt', 'inStock'
         ])
+      ) || (
+        // Allow authenticated customers to decrement inventory stock during checkout
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']) &&
+        request.resource.data.stock is number &&
+        request.resource.data.stock >= 0 &&
+        (!('stock' in resource.data) || request.resource.data.stock <= resource.data.stock)
       );
 
       allow delete: if isAdmin() || (
@@ -264,7 +273,7 @@ service cloud.firestore {
         request.resource.data.customerId == request.auth.uid &&
         request.resource.data.orderStatus == 'placed' &&
         request.resource.data.pointsCredited == false &&
-        request.resource.data.referralRewardCredited == false &&
+        (!('referralRewardCredited' in request.resource.data) || request.resource.data.referralRewardCredited == false) &&
         request.resource.data.totalAmount is number && request.resource.data.totalAmount >= 0 &&
         request.resource.data.subtotal is number && request.resource.data.subtotal >= 0
       );

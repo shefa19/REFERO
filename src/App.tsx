@@ -21,10 +21,11 @@ import { PolicyPages } from './pages/PolicyPages';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
-  const { currentView, toast } = useStore();
+  const { currentView, previousView, toast } = useStore();
 
   const renderCurrentView = () => {
-    switch (currentView) {
+    const activeMainView = currentView === 'product_detail' ? (previousView || 'home') : currentView;
+    switch (activeMainView) {
       case 'home':
         return <HomePage />;
       case 'products':

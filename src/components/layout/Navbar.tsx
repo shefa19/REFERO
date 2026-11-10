@@ -63,7 +63,10 @@ export const Navbar: React.FC = () => {
   // Strictly isolate user notifications - never expose previous account or admin notifications to guests
   const userNotifications = currentUser
     ? notifications.filter(
-        (n) => n.userId === currentUser.id || (currentUser.role === 'admin' && (n.userId === 'admin' || !n.userId))
+        (n) =>
+          n.userId === currentUser.id ||
+          (n.recipientEmail && currentUser.email && n.recipientEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (currentUser.role === 'admin' && (n.userId === 'admin' || !n.userId || (n.recipientEmail && n.recipientEmail.toLowerCase() === 'admin@refero.com.bd')))
       )
     : [];
   const unreadCount = userNotifications.filter((n) => !n.read).length;
@@ -345,8 +348,11 @@ export const Navbar: React.FC = () => {
                           key={notif.id}
                           onClick={() => {
                             markNotificationAsRead(notif.id);
-                            if (notif.link === 'admin_shops' || notif.link === 'shops') {
-                              navigateTo('admin_dashboard');
+                            if (notif.link === 'admin_points' || (currentUser?.role === 'admin' && (notif.type === 'transfer' || notif.link === 'transfers'))) {
+                              navigateTo('admin_dashboard', { adminTab: 'points_config' });
+                              setIsNotificationsOpen(false);
+                            } else if (notif.link === 'admin_shops' || notif.link === 'shops') {
+                              navigateTo('admin_dashboard', { adminTab: 'shops' });
                               setIsNotificationsOpen(false);
                             } else if (notif.link === 'shopkeeper_dashboard') {
                               navigateTo('shopkeeper_dashboard');
@@ -365,6 +371,9 @@ export const Navbar: React.FC = () => {
                               setIsNotificationsOpen(false);
                             } else if (notif.link === 'points') {
                               navigateTo('customer_dashboard', { customerTab: 'points' });
+                              setIsNotificationsOpen(false);
+                            } else if (currentUser?.role === 'admin') {
+                              navigateTo('admin_dashboard');
                               setIsNotificationsOpen(false);
                             }
                           }}

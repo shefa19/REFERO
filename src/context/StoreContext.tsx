@@ -108,6 +108,9 @@ interface StoreContextType {
   filters: ProductFilterState;
   customerTab: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist';
   setCustomerTab: (tab: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist') => void;
+  adminTab: 'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs';
+  setAdminTab: (tab: 'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs') => void;
+  previousView: AppView;
 
   // Navigation actions
   navigateTo: (
@@ -117,8 +120,11 @@ interface StoreContextType {
       shopId?: string;
       orderId?: string;
       customerTab?: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist';
+      adminTab?: 'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs';
     }
   ) => void;
+  goBack: () => void;
+  closeProductModal: () => void;
   openCartDrawer: () => void;
   closeCartDrawer: () => void;
   openAuthModal: (tab?: 'login' | 'register') => void;
@@ -233,6 +239,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Navigation & View state
   const [currentView, setCurrentView] = useState<AppView>('home');
+  const [previousView, setPreviousView] = useState<AppView>('home');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedShopId, setSelectedShopId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -273,10 +280,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [pointsConfig, setPointsConfig] = useState<PointsConfig>(INITIAL_POINTS_CONFIG);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(DEMO_AUDIT_LOGS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(DEMO_NOTIFICATIONS);
-  const [reviews, setReviews] = useState<ProductReview[]>(() => isFirebaseConfigured() ? [] : DEMO_REVIEWS);
+  const [reviews, setReviews] = useState<ProductReview[]>(DEMO_REVIEWS);
   const [filters, setFilters] = useState<ProductFilterState>(defaultFilterState);
   const [customerTab, setCustomerTab] = useState<
     'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist'
+  >('overview');
+  const [adminTab, setAdminTab] = useState<
+    'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs'
   >('overview');
   const [dataSources, setDataSources] = useState<{
     products: 'live' | 'demo';
@@ -693,6 +703,131 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 3800);
   };
 
+  // Body scroll lock behind modals, drawers, and overlays
+  useEffect(() => {
+    const isAnyModalOpen =
+      isCartDrawerOpen ||
+      isAuthModalOpen ||
+      isFirebaseModalOpen ||
+      isSellerModalOpen ||
+      currentView === 'product_detail';
+
+    if (isAnyModalOpen) {
+      const originalOverflow = document.body.style.overflow;
+      const originalPaddingRight = document.body.style.paddingRight;
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+      document.body.style.overflow = 'hidden';
+      if (scrollbarWidth > 0) {
+        document.body.style.paddingRight = `${scrollbarWidth}px`;
+      }
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        document.body.style.paddingRight = originalPaddingRight;
+      };
+    }
+  }, [isCartDrawerOpen, isAuthModalOpen, isFirebaseModalOpen, isSellerModalOpen, currentView]);
+
+  const closeProductModal = () => {
+    let savedY: string | null = null;
+    try {
+      savedY = sessionStorage.getItem('refero_modal_scroll');
+    } catch {}
+    const returnView = previousView && previousView !== 'product_detail' ? previousView : 'home';
+    setCurrentView(returnView);
+    setSelectedProductId(null);
+
+    try {
+      const stateObj = {
+        view: returnView,
+        productId: null,
+      };
+      window.history.pushState(stateObj, '', '');
+    } catch {}
+
+    if (savedY !== null) {
+      const y = parseInt(savedY, 10);
+      if (!isNaN(y)) {
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: y, behavior: 'instant' });
+        });
+      }
+    }
+  };
+
+  // HTML5 History navigation listener (browser Back/Forward buttons) & Scroll restoration
+  useEffect(() => {
+    try {
+      if (!window.history.state || !window.history.state.view) {
+        window.history.replaceState({ view: 'home' }, '', '');
+      }
+    } catch {}
+
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (state && state.view) {
+        if (state.view === 'product_detail') {
+          setCurrentView('product_detail');
+          setSelectedProductId(state.productId || null);
+          return;
+        }
+
+        const targetView = state.view as AppView;
+        setCurrentView(targetView);
+        setSelectedProductId(state.productId || null);
+        setSelectedShopId(state.shopId || null);
+        setSelectedOrderId(state.orderId || null);
+        if (state.customerTab) setCustomerTab(state.customerTab);
+        if (state.adminTab) setAdminTab(state.adminTab);
+
+        // Restore scroll position for target view
+        let savedY: string | null = null;
+        try {
+          savedY = sessionStorage.getItem(`refero_scroll_${targetView}`);
+          if (!savedY && (targetView === 'home' || targetView === 'products')) {
+            savedY = sessionStorage.getItem('refero_modal_scroll');
+          }
+        } catch {}
+
+        if (savedY !== null) {
+          const y = parseInt(savedY, 10);
+          if (!isNaN(y)) {
+            requestAnimationFrame(() => {
+              window.scrollTo({ top: y, behavior: 'instant' });
+            });
+            return;
+          }
+        }
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      } else {
+        setCurrentView('home');
+        setSelectedProductId(null);
+        setSelectedShopId(null);
+        setSelectedOrderId(null);
+        let savedY: string | null = null;
+        try {
+          savedY = sessionStorage.getItem('refero_modal_scroll') || sessionStorage.getItem('refero_scroll_home');
+        } catch {}
+        if (savedY !== null) {
+          const y = parseInt(savedY, 10);
+          if (!isNaN(y)) {
+            requestAnimationFrame(() => {
+              window.scrollTo({ top: y, behavior: 'instant' });
+            });
+            return;
+          }
+        }
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [previousView]);
+
   const navigateTo = (
     view: AppView,
     params?: {
@@ -700,14 +835,95 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       shopId?: string;
       orderId?: string;
       customerTab?: 'overview' | 'orders' | 'points' | 'referrals' | 'transfers' | 'wishlist';
+      adminTab?: 'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs';
     }
   ) => {
+    if (view === 'product_detail') {
+      // Save current scroll position and current view before opening product modal
+      if (currentView !== 'product_detail') {
+        setPreviousView(currentView);
+        try {
+          sessionStorage.setItem('refero_modal_scroll', window.scrollY.toString());
+          sessionStorage.setItem(`refero_scroll_${currentView}`, window.scrollY.toString());
+        } catch {}
+      }
+      setCurrentView('product_detail');
+      if (params?.productId !== undefined) setSelectedProductId(params.productId || null);
+
+      try {
+        const stateObj = {
+          view: 'product_detail',
+          productId: params?.productId || null,
+          previousView: currentView !== 'product_detail' ? currentView : previousView,
+        };
+        window.history.pushState(stateObj, '', '');
+      } catch {}
+
+      // Preserve background scroll position - do NOT scroll to top
+      return;
+    }
+
+    // Save scroll position for the page we are navigating away from
+    try {
+      sessionStorage.setItem(`refero_scroll_${currentView}`, window.scrollY.toString());
+    } catch {}
+
+    setPreviousView(currentView);
     setCurrentView(view);
-    if (params?.productId) setSelectedProductId(params.productId);
-    if (params?.shopId) setSelectedShopId(params.shopId);
-    if (params?.orderId) setSelectedOrderId(params.orderId);
+    if (params?.productId !== undefined) setSelectedProductId(params.productId || null);
+    if (params?.shopId !== undefined) setSelectedShopId(params.shopId || null);
+    if (params?.orderId !== undefined) setSelectedOrderId(params.orderId || null);
     if (params?.customerTab) setCustomerTab(params.customerTab);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (params?.adminTab) setAdminTab(params.adminTab);
+
+    // Push history state so browser Back/Forward navigation works seamlessly across all views
+    try {
+      const stateObj = {
+        view,
+        productId: params?.productId || null,
+        shopId: params?.shopId || null,
+        orderId: params?.orderId || null,
+        customerTab: params?.customerTab,
+        adminTab: params?.adminTab,
+      };
+      const currentState = window.history.state;
+      if (!currentState || currentState.view !== view || currentState.productId !== (params?.productId || null)) {
+        window.history.pushState(stateObj, '', '');
+      }
+    } catch {}
+
+    // Check if we have a saved scroll position for the destination view (e.g. returning to it)
+    let restoredScroll: number | null = null;
+    try {
+      const saved = sessionStorage.getItem(`refero_scroll_${view}`);
+      if (saved !== null) {
+        restoredScroll = parseInt(saved, 10);
+      }
+    } catch {}
+
+    if (restoredScroll !== null && !isNaN(restoredScroll) && restoredScroll > 0) {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: restoredScroll!, behavior: 'instant' });
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const goBack = () => {
+    if (currentView === 'product_detail') {
+      closeProductModal();
+      return;
+    }
+    try {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        navigateTo('home');
+      }
+    } catch {
+      navigateTo('home');
+    }
   };
 
   const openCartDrawer = () => setIsCartDrawerOpen(true);
@@ -1190,16 +1406,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
 
           // Incoming transfer notification for recipient (Event A)
+          const isTargetAdmin = cleanEmail === 'admin@refero.com.bd' || recipientData.role === 'admin';
+          const notifUserId = isTargetAdmin ? 'admin' : (recipientId || cleanEmail);
+          const notifLink = isTargetAdmin ? 'admin_points' : 'transfers';
           const notifId = `notif_incoming_transfer_${newRequestId}`;
           const notifRef = doc(activeDb, 'notifications', notifId);
           transaction.set(notifRef, {
             id: notifId,
-            userId: recipientId || cleanEmail,
+            userId: notifUserId,
             recipientEmail: cleanEmail,
-            title: 'Incoming Point Transfer',
+            title: isTargetAdmin ? 'Customer Sent Points to Admin' : 'Incoming Point Transfer',
             message: `${currentUser.fullName} sent you a point transfer request for ${points} REFERO Points.${note ? ` Note: "${note}"` : ''}`,
             type: 'transfer',
-            link: 'transfers',
+            link: notifLink,
             read: false,
             createdAt: new Date().toISOString(),
           });
@@ -1223,14 +1442,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setTransferRequests((prev) => [newRequest, ...prev]);
 
         // In-memory recipient notification
+        const isTargetAdminLocal = cleanEmail === 'admin@refero.com.bd' || recipientData.role === 'admin';
         const incomingNotif: NotificationItem = {
           id: `notif_incoming_transfer_${newRequestId}`,
-          userId: recipientId || cleanEmail,
+          userId: isTargetAdminLocal ? 'admin' : (recipientId || cleanEmail),
           recipientEmail: cleanEmail,
-          title: 'Incoming Point Transfer',
+          title: isTargetAdminLocal ? 'Customer Sent Points to Admin' : 'Incoming Point Transfer',
           message: `${currentUser.fullName} sent you a point transfer request for ${points} REFERO Points.${note ? ` Note: "${note}"` : ''}`,
           type: 'transfer',
-          link: 'transfers',
+          link: isTargetAdminLocal ? 'admin_points' : 'transfers',
           read: false,
           createdAt: new Date().toISOString(),
         };
@@ -1346,17 +1566,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         await setDoc(requestDocRef, newRequestData);
 
-        // Notification for the friend from whom points are requested
+        // Notification for the friend (or Admin) from whom points are requested
+        const isTargetAdmin = cleanEmail === 'admin@refero.com.bd' || recipientData.role === 'admin';
+        const notifUserId = isTargetAdmin ? 'admin' : (recipientId || cleanEmail);
+        const notifLink = isTargetAdmin ? 'admin_points' : 'transfers';
         const notifId = `notif_incoming_req_${newRequestId}`;
         const notifRef = doc(activeDb, 'notifications', notifId);
         await setDoc(notifRef, {
           id: notifId,
-          userId: recipientId || cleanEmail,
+          userId: notifUserId,
           recipientEmail: cleanEmail,
-          title: 'Incoming Point Request',
+          title: isTargetAdmin ? 'Point Request Sent to Admin' : 'Incoming Point Request',
           message: `${currentUser.fullName} requested ${points} REFERO Points from you.${note ? ` Note: "${note}"` : ''}`,
           type: 'transfer',
-          link: 'transfers',
+          link: notifLink,
           read: false,
           createdAt: new Date().toISOString(),
         });
@@ -1372,12 +1595,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Demo Mode
     const newRequestId = `req_point_${Date.now()}`;
+    const isTargetAdmin = cleanEmail === 'admin@refero.com.bd';
+    const notifUserId = isTargetAdmin ? 'admin' : `user_recip_${Date.now()}`;
+    const notifLink = isTargetAdmin ? 'admin_points' : 'transfers';
+
     const newRequestData: PointTransferRequest = {
       id: newRequestId,
       senderId: currentUser.id,
       senderName: currentUser.fullName,
       senderEmail: currentUser.email,
-      recipientId: `user_recip_${Date.now()}`,
+      recipientId: notifUserId,
       recipientEmail: cleanEmail,
       recipientName: cleanEmail.split('@')[0],
       points,
@@ -1387,6 +1614,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: new Date().toISOString(),
     };
     setTransferRequests((prev) => [newRequestData, ...prev]);
+
+    // Recipient notification in demo mode
+    const incomingReqNotif: NotificationItem = {
+      id: `notif_incoming_req_${newRequestId}`,
+      userId: notifUserId,
+      recipientEmail: cleanEmail,
+      title: isTargetAdmin ? 'Point Request Sent to Admin' : 'Incoming Point Request',
+      message: `${currentUser.fullName} requested ${points} REFERO Points from you.${note ? ` Note: "${note}"` : ''}`,
+      type: 'transfer',
+      link: notifLink,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+    setNotifications((prev) => [incomingReqNotif, ...prev]);
+
     showToast(`Point request for ${points} points sent to ${cleanEmail}`);
     return { success: true, message: `Request for ${points} points sent successfully.` };
   };
@@ -3520,7 +3762,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         filters,
         customerTab,
         setCustomerTab,
+        adminTab,
+        setAdminTab,
+        previousView,
         navigateTo,
+        goBack,
+        closeProductModal,
         openCartDrawer,
         closeCartDrawer,
         openAuthModal,

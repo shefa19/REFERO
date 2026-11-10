@@ -817,23 +817,6 @@ export const ShopkeeperDashboard: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <button
-                type="button"
-                onClick={async () => {
-                  setIsSeedingCatalog(true);
-                  try {
-                    await seedShopProducts(myShop.id, myShop.name);
-                  } finally {
-                    setIsSeedingCatalog(false);
-                  }
-                }}
-                disabled={isSeedingCatalog}
-                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-                title="Populate 10 rich Bangladeshi grocery products with photos and prices"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                <span>{isSeedingCatalog ? 'Adding 10 Products...' : 'Seed 10 Sample Products'}</span>
-              </button>
-              <button
                 onClick={handleOpenAdd}
                 className="px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] flex items-center gap-1.5 cursor-pointer"
               >
@@ -848,31 +831,15 @@ export const ShopkeeperDashboard: React.FC = () => {
               <Package className="w-12 h-12 text-slate-400 mx-auto" />
               <h4 className="text-sm font-bold text-[#142B4A]">No products listed in your storefront yet</h4>
               <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Get started quickly by populating 10 high-demand Bangladeshi grocery items (Mustard Oil, Sundarban Honey, Ghee, Chinigura Rice, Sylhet Tea, and Spices) or manually add your own products.
+                Add your high-demand Bangladeshi grocery and organic items to start selling to verified customers across the marketplace.
               </p>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setIsSeedingCatalog(true);
-                    try {
-                      await seedShopProducts(myShop.id, myShop.name);
-                    } finally {
-                      setIsSeedingCatalog(false);
-                    }
-                  }}
-                  disabled={isSeedingCatalog}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-2 shadow-xs cursor-pointer transition-colors"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{isSeedingCatalog ? 'Populating Storefront...' : 'Seed 10 Sample Storefront Products'}</span>
-                </button>
+              <div className="flex items-center justify-center pt-2">
                 <button
                   onClick={handleOpenAdd}
                   className="px-4 py-2 bg-[#142B4A] hover:bg-[#1E3A5F] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Add Custom Product</span>
+                  <span>Add Product</span>
                 </button>
               </div>
             </div>

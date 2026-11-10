@@ -59,11 +59,19 @@ export const AdminDashboard: React.FC = () => {
     navigateTo,
     openAuthModal,
     notifications,
+    adminTab,
+    setAdminTab,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
     'overview' | 'users' | 'shops' | 'products' | 'orders' | 'reviews' | 'points_config' | 'audit_logs'
-  >('overview');
+  >(adminTab || 'overview');
+
+  useEffect(() => {
+    if (adminTab && adminTab !== activeTab) {
+      setActiveTab(adminTab);
+    }
+  }, [adminTab]);
 
   const [reviewFilter, setReviewFilter] = useState<'all' | 'pending' | 'published' | 'flagged' | 'hidden'>('all');
 
