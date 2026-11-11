@@ -203,12 +203,13 @@ interface StoreContextType {
   ) => Promise<{ success: boolean; message: string }>;
 
   // Product Reviews & Ratings (Verified Purchases)
-  checkReviewEligibility: (productId: string) => { isEligible: boolean; qualifyingOrderId?: string; reason?: string };
+  checkReviewEligibility: (productId: string, specificOrderId?: string) => { isEligible: boolean; qualifyingOrderId?: string; reason?: string };
   submitProductReview: (reviewData: {
     productId: string;
     rating: number;
     comment: string;
     images?: string[];
+    orderId?: string;
   }) => Promise<{ success: boolean; message: string }>;
   updateProductReview: (
     reviewId: string,
@@ -3565,18 +3566,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // ---------------------------------------------------------------------------
   // Customer Product Reviews & Ratings (Verified Purchases only)
   // ---------------------------------------------------------------------------
-  const checkReviewEligibility = (productId: string): { isEligible: boolean; qualifyingOrderId?: string; reason?: string } => {
+  const checkReviewEligibility = (
+    productId: string,
+    specificOrderId?: string
+  ): { isEligible: boolean; qualifyingOrderId?: string; reason?: string } => {
     if (!currentUser) {
       return { isEligible: false, reason: 'Please sign in to write a product review.' };
     }
 
     // Find a genuinely completed or delivered order containing this product
-    const deliveredOrder = orders.find(
-      (o) =>
-        o.customerId === currentUser.id &&
-        (o.orderStatus === 'completed' || o.orderStatus === 'delivered') &&
-        o.items.some((it) => it.productId === productId)
-    );
+    let deliveredOrder = specificOrderId
+      ? orders.find(
+          (o) =>
+            o.id === specificOrderId &&
+            o.customerId === currentUser.id &&
+            (o.orderStatus === 'completed' || o.orderStatus === 'delivered') &&
+            o.items.some((it) => it.productId === productId)
+        )
+      : undefined;
+
+    if (!deliveredOrder) {
+      deliveredOrder = orders.find(
+        (o) =>
+          o.customerId === currentUser.id &&
+          (o.orderStatus === 'completed' || o.orderStatus === 'delivered') &&
+          o.items.some((it) => it.productId === productId)
+      );
+    }
 
     if (!deliveredOrder) {
       const pendingOrder = orders.find(
@@ -3627,6 +3643,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     rating: number;
     comment: string;
     images?: string[];
+    orderId?: string;
   }): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) {
       return { success: false, message: 'You must be signed in to submit a review.' };
@@ -3640,15 +3657,44 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { success: false, message: 'Please write a meaningful review (at least 5 characters).' };
     }
 
-    const eligibility = checkReviewEligibility(reviewData.productId);
+    const eligibility = checkReviewEligibility(reviewData.productId, reviewData.orderId);
     if (!eligibility.isEligible || !eligibility.qualifyingOrderId) {
       return { success: false, message: eligibility.reason || 'You are not eligible to review this product.' };
     }
 
-    const targetProduct = products.find((p) => p.id === reviewData.productId);
+    let targetProduct = products.find((p) => p.id === reviewData.productId);
+    if (!targetProduct) {
+      // Fallback from order item
+      const orderMatch = orders.find((o) => o.id === eligibility.qualifyingOrderId);
+      const itemMatch = orderMatch?.items.find((it) => it.productId === reviewData.productId);
+      if (itemMatch) {
+        targetProduct = {
+          id: itemMatch.productId,
+          title: itemMatch.title,
+          description: '',
+          category: 'Grocery',
+          brand: 'General',
+          shopId: itemMatch.shopId || orderMatch?.shopId || 'shop_main',
+          shopName: itemMatch.shopName || orderMatch?.shopName || 'Main Store',
+          price: itemMatch.price,
+          images: [itemMatch.image],
+          unit: itemMatch.unit || 'item',
+          stock: 10,
+          pointsEarned: 0,
+          canRedeemWithPoints: false,
+          rating: 5,
+          reviewCount: 0,
+          createdAt: new Date().toISOString(),
+        };
+      } else {
+        return { success: false, message: 'Product not found.' };
+      }
+    }
+
     if (!targetProduct) {
       return { success: false, message: 'Product not found.' };
     }
+    const resolvedProduct = targetProduct;
 
     // Deterministic review ID enforced by Firestore rules to strictly prevent duplicate reviews
     const reviewId = `review_${eligibility.qualifyingOrderId}_${reviewData.productId}`;
@@ -3659,8 +3705,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const newReview: ProductReview = {
       id: reviewId,
       productId: reviewData.productId,
-      productTitle: targetProduct.title,
-      shopId: targetProduct.shopId,
+      productTitle: resolvedProduct.title,
+      shopId: resolvedProduct.shopId,
       orderId: eligibility.qualifyingOrderId,
       customerId: currentUser.id,
       customerName: currentUser.fullName,
@@ -3708,7 +3754,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addNotification({
         userId: currentUser.id,
         title: 'Review Published',
-        message: `Your verified purchase review for "${targetProduct.title}" was published!`,
+        message: `Your verified purchase review for "${resolvedProduct.title}" was published!`,
         type: 'system',
       });
 
@@ -3718,7 +3764,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addNotification({
         userId: currentUser.id,
         title: 'Review Submitted',
-        message: `Your verified purchase review for "${targetProduct.title}" has been submitted for moderation.`,
+        message: `Your verified purchase review for "${resolvedProduct.title}" has been submitted for moderation.`,
         type: 'system',
       });
 
