@@ -29,7 +29,7 @@ import {
   DEMO_NOTIFICATIONS,
   DEMO_REVIEWS,
 } from '../data/seedData';
-import { calculateEarnedPoints, pointsToBdt } from '../utils/formatters';
+import { calculateEarnedPoints, pointsToBdt, formatBDT } from '../utils/formatters';
 import { cleanUndefinedFields } from '../utils/cleaners';
 import { resolveProductImage } from '../utils/imageAssets';
 import { db, isFirebaseConfigured } from '../services/firebase/config';
@@ -169,6 +169,7 @@ interface StoreContextType {
   updateProduct: (productId: string, updates: Partial<Product>) => void | Promise<void>;
   deleteProduct: (productId: string) => void | Promise<void>;
   updateOrderItemStatus: (orderId: string, status: Order['orderStatus']) => void;
+  updateOrderStatus: (orderId: string, status: Order['orderStatus']) => void;
   applyForSellerShop: (shopData: {
     name: string;
     description: string;
@@ -1361,6 +1362,51 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setOrders((prev) => [newOrder, ...prev]);
     clearCart();
     setSelectedOrderId(newOrder.id);
+
+    // 3. Dispatch in-app order notifications to respective Shopkeeper(s)
+    const targetSellerUids = (newOrder.sellerUids && newOrder.sellerUids.length > 0)
+      ? newOrder.sellerUids
+      : (newOrder.sellerUid ? [newOrder.sellerUid] : (primaryShop?.ownerId ? [primaryShop.ownerId] : []));
+
+    const orderNotifTimestamp = new Date().toISOString();
+
+    for (const sUid of targetSellerUids) {
+      if (!sUid || sUid === currentUser.id) continue;
+      const notifId = `notif_order_${newOrder.id}_${sUid}`;
+
+      if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
+        try {
+          const notifRef = doc(collection(activeDb, 'notifications'), notifId);
+          await setDoc(notifRef, {
+            id: notifId,
+            userId: sUid,
+            type: 'order',
+            title: 'New Order Received',
+            message: `New order #${newOrder.orderNumber} received for ${formatBDT(newOrder.totalAmount)} from ${newOrder.customerName}.`,
+            link: 'shopkeeper_dashboard',
+            orderId: newOrder.id,
+            read: false,
+            createdAt: orderNotifTimestamp,
+          });
+        } catch (notifErr) {
+          console.warn('Shopkeeper order notification dispatch note:', notifErr);
+        }
+      }
+
+      // In-memory notification state update
+      const sellerNotif: NotificationItem = {
+        id: notifId,
+        userId: sUid,
+        type: 'order',
+        title: 'New Order Received',
+        message: `New order #${newOrder.orderNumber} received for ${formatBDT(newOrder.totalAmount)} from ${newOrder.customerName}.`,
+        link: 'shopkeeper_dashboard',
+        read: false,
+        createdAt: orderNotifTimestamp,
+      };
+      setNotifications((prev) => [sellerNotif, ...prev]);
+    }
+
     if (isAdminPreviewActive) {
       showToast(`[Demo Preview] Order #${newOrder.orderNumber} placed in preview mode (Production database untouched).`);
     } else {
@@ -2505,7 +2551,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateOrderItemStatus = async (orderId: string, newStatus: Order['orderStatus']) => {
-    const targetOrder = orders.find((o) => o.id === orderId);
+    let targetOrder = orders.find((o) => o.id === orderId);
+    const activeDb = db;
+
+    // Fallback: If not currently in local store orders array, fetch directly from Firestore
+    if (!targetOrder && activeDb && isFirebaseConfigured() && !isAdminPreviewActive) {
+      try {
+        const orderSnap = await getDoc(doc(activeDb, 'orders', orderId));
+        if (orderSnap.exists()) {
+          targetOrder = { id: orderSnap.id, ...orderSnap.data() } as Order;
+        }
+      } catch (fErr) {
+        console.warn('Could not fetch order from Firestore:', fErr);
+      }
+    }
+
     if (!targetOrder) {
       showToast('Order not found.', 'error');
       return;
@@ -2514,7 +2574,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Authorization check: Only Admin or the Seller of the order's shop can change status
     const isAdminUser = currentUser?.role === 'admin';
     const userShopId = currentUser?.shopId || shops.find((s) => s.ownerId === currentUser?.id)?.id;
-    const isOrderSeller = (currentUser?.role === 'shopkeeper' || Boolean(userShopId)) && (
+    const isOrderSeller = (currentUser?.role === 'shopkeeper' || Boolean(userShopId) || isAdminUser) && (
+      isAdminUser ||
       (userShopId && (targetOrder as any).shopId === userShopId) ||
       (userShopId && targetOrder.shopIds?.includes(userShopId)) ||
       (userShopId && targetOrder.items.some((it) => it.shopId === userShopId)) ||
@@ -2527,7 +2588,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    const activeDb = db;
     const timestamp = new Date().toISOString();
 
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
@@ -2535,6 +2595,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const orderRef = doc(activeDb, 'orders', orderId);
         await updateDoc(orderRef, {
           orderStatus: newStatus,
+          updatedAt: timestamp,
           ...(newStatus === 'delivered' ? { deliveredAt: timestamp } : {}),
         });
 
@@ -2553,7 +2614,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
         }
       } catch (err: any) {
-        console.warn('Firestore update order status notice:', err);
+        console.error('Firestore update order status error:', err);
+        showToast(err.message || 'Failed to update order status in database.', 'error');
+        throw err;
       }
     }
 
@@ -3858,6 +3921,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deleteProduct,
         seedShopProducts,
         updateOrderItemStatus,
+        updateOrderStatus: updateOrderItemStatus,
         applyForSellerShop,
         updateShopPolicies,
         updatePointsConfig,

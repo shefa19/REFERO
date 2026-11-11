@@ -265,8 +265,13 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read: if isAdmin() ||
         (isAuthenticated() && resource.data.customerId == request.auth.uid) ||
+        (isAuthenticated() && ('sellerUids' in resource.data) && resource.data.sellerUids.hasAny([request.auth.uid])) ||
+        (isAuthenticated() && ('sellerUid' in resource.data) && resource.data.sellerUid == request.auth.uid) ||
         (isAuthenticated() && ('shopId' in resource.data) && isShopOwner(resource.data.shopId)) ||
-        (isAuthenticated() && ('shopIds' in resource.data) && resource.data.shopIds.hasAny([getUserData(request.auth.uid).shopId]));
+        (isAuthenticated() && ('shopIds' in resource.data) && (
+          (userDocExists(request.auth.uid) && ('shopId' in getUserData(request.auth.uid)) && resource.data.shopIds.hasAny([getUserData(request.auth.uid).shopId])) ||
+          isShopkeeper()
+        ));
 
       allow create: if isAdmin() || (
         isAuthenticated() &&
@@ -306,12 +311,19 @@ service cloud.firestore {
       ) || (
         // 3. Shopkeeper managing fulfillment status for their own orders
         // Sellers cannot self-award customer points (pointsCredited must remain unchanged)
-        isShopkeeper() &&
         (
+          isShopkeeper() ||
           (('shopId' in resource.data) && isShopOwner(resource.data.shopId)) ||
-          (('shopIds' in resource.data) && resource.data.shopIds.hasAny([getUserData(request.auth.uid).shopId]))
+          (('sellerUids' in resource.data) && resource.data.sellerUids.hasAny([request.auth.uid])) ||
+          (('sellerUid' in resource.data) && resource.data.sellerUid == request.auth.uid)
         ) &&
-        request.resource.data.orderStatus in ['confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled'] &&
+        (
+          (('sellerUids' in resource.data) && resource.data.sellerUids.hasAny([request.auth.uid])) ||
+          (('sellerUid' in resource.data) && resource.data.sellerUid == request.auth.uid) ||
+          (('shopId' in resource.data) && isShopOwner(resource.data.shopId)) ||
+          (('shopIds' in resource.data) && userDocExists(request.auth.uid) && ('shopId' in getUserData(request.auth.uid)) && resource.data.shopIds.hasAny([getUserData(request.auth.uid).shopId]))
+        ) &&
+        request.resource.data.orderStatus in ['placed', 'confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled'] &&
         request.resource.data.customerId == resource.data.customerId &&
         request.resource.data.subtotal == resource.data.subtotal &&
         request.resource.data.totalAmount == resource.data.totalAmount &&
@@ -599,10 +611,10 @@ service cloud.firestore {
             request.resource.data.type == 'system' &&
             notificationId.matches('notif_seller_app_.*')
           ) ||
-          // 3. Seller dispatch notice to customer
+          // 3. Order notifications (customer order notification to seller, or seller dispatch notice to customer)
           (
-            isShopkeeper() &&
-            request.resource.data.type == 'order'
+            request.resource.data.type == 'order' &&
+            request.resource.data.userId is string
           ) ||
           // 4. Point transfer notification to counterparty
           (
