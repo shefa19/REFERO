@@ -27,6 +27,7 @@ import {
   Image as ImageIcon,
   Link as LinkIcon,
   Check,
+  ShoppingBag,
 } from 'lucide-react';
 import { db, isFirebaseConfigured, storage } from '../../services/firebase/config';
 import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -55,6 +56,21 @@ export const ShopkeeperDashboard: React.FC = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [isSeedingCatalog, setIsSeedingCatalog] = useState(false);
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+
+  const handleStatusChange = async (orderId: string, newStatus: Order['orderStatus']) => {
+    setUpdatingOrderId(orderId);
+    try {
+      setRealtimeOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, orderStatus: newStatus } : o))
+      );
+      await updateOrderItemStatus(orderId, newStatus);
+    } catch (err) {
+      console.error('Failed to update order status:', err);
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  };
 
   // Active shopkeeper's shop
   const fallbackShop: Shop = {
@@ -1046,58 +1062,153 @@ export const ShopkeeperDashboard: React.FC = () => {
           </div>
 
           {myShopOrders.length === 0 ? (
-            <p className="text-xs text-slate-500 py-6 text-center">No orders received yet.</p>
+            <div className="py-12 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <Package className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-xs font-semibold text-slate-700">No orders received yet.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">When customers purchase items from your storefront, they will appear here in real time.</p>
+            </div>
           ) : (
-            <div className="divide-y divide-slate-100 space-y-3">
-              {myShopOrders.map((ord) => (
-                <div key={ord.id} className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
-                  <div>
-                    <span className="font-bold text-[#142B4A]">Order #{ord.orderNumber}</span>
-                    <span className="text-slate-400 ml-2 font-mono">{formatDate(ord.createdAt)}</span>
-                    <p className="text-slate-600 mt-0.5">
-                      Customer: <strong>{ord.customerName}</strong> ({ord.deliveryAddress.phone})
-                    </p>
-                    <p className="text-slate-500 text-[11px] mt-0.5">
-                      Destination: {ord.deliveryAddress.address}, {ord.deliveryAddress.district}
-                    </p>
-                  </div>
+            <div className="space-y-4">
+              {myShopOrders.map((ord) => {
+                const shopItems = ord.items?.filter((it) => it.shopId === myShop.id);
+                const itemsToDisplay = (shopItems && shopItems.length > 0) ? shopItems : (ord.items || []);
+                const itemsTotal = itemsToDisplay.reduce((sum, it) => sum + it.price * it.quantity, 0);
 
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                        ord.orderStatus === 'completed'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : ord.orderStatus === 'delivered'
-                          ? 'bg-teal-50 text-teal-800'
-                          : ord.orderStatus === 'shipped'
-                          ? 'bg-blue-50 text-blue-800'
-                          : 'bg-amber-50 text-amber-800'
-                      }`}
-                    >
-                      {ord.orderStatus === 'completed' ? '✓ Completed' : ord.orderStatus}
-                    </span>
+                return (
+                  <div key={ord.id} className="bg-slate-50/80 rounded-xl border border-slate-200 p-4 space-y-3.5 text-xs transition-shadow hover:shadow-xs">
+                    {/* Top Row: Order Header & Customer Information */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#142B4A] text-sm flex items-center gap-1.5">
+                            <ShoppingBag className="w-4 h-4 text-[#F47B44]" />
+                            Order #{ord.orderNumber}
+                          </span>
+                          <span className="text-slate-400 font-mono text-[11px]">{formatDate(ord.createdAt)}</span>
+                        </div>
+                        <p className="text-slate-600 mt-1">
+                          Buyer: <strong>{ord.customerName}</strong> ({ord.deliveryAddress?.phone || ord.customerPhone})
+                        </p>
+                        <p className="text-slate-500 text-[11px] mt-0.5">
+                          Destination: {ord.deliveryAddress?.address}, {ord.deliveryAddress?.district}
+                          {ord.deliveryAddress?.notes && <span className="text-amber-700 block italic mt-0.5">Note: {ord.deliveryAddress.notes}</span>}
+                        </p>
+                      </div>
 
-                    {/* Status updater dropdown */}
-                    {ord.orderStatus === 'completed' ? (
-                      <span className="text-xs text-emerald-700 font-semibold px-2 py-1 bg-emerald-50 rounded-lg">
-                        Customer Confirmed
-                      </span>
-                    ) : (
-                      <select
-                        value={ord.orderStatus}
-                        onChange={(e) => updateOrderItemStatus(ord.id, e.target.value as any)}
-                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700"
-                      >
-                        <option value="placed">Placed</option>
-                        <option value="confirmed">Confirmed</option>
-                        <option value="processing">Processing</option>
-                        <option value="shipped">Dispatched (Shipped)</option>
-                        <option value="delivered">Delivered (Notify Buyer)</option>
-                      </select>
-                    )}
+                      {/* Status badge & selector */}
+                      <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-center">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            ord.orderStatus === 'completed'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : ord.orderStatus === 'delivered'
+                              ? 'bg-teal-100 text-teal-800 border border-teal-200'
+                              : ord.orderStatus === 'shipped'
+                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                              : ord.orderStatus === 'processing'
+                              ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                              : ord.orderStatus === 'confirmed'
+                              ? 'bg-sky-100 text-sky-800 border border-sky-200'
+                              : ord.orderStatus === 'cancelled'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {ord.orderStatus === 'completed' ? '✓ Completed' : ord.orderStatus}
+                        </span>
+
+                        {ord.orderStatus === 'completed' ? (
+                          <span className="text-xs text-emerald-700 font-semibold px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-lg">
+                            Customer Confirmed
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={ord.orderStatus}
+                              disabled={updatingOrderId === ord.id}
+                              onChange={(e) => handleStatusChange(ord.id, e.target.value as Order['orderStatus'])}
+                              className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 shadow-2xs hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-[#142B4A] cursor-pointer disabled:opacity-60"
+                            >
+                              <option value="placed">Placed</option>
+                              <option value="confirmed">Confirmed</option>
+                              <option value="processing">Processing</option>
+                              <option value="shipped">Dispatched (Shipped)</option>
+                              <option value="delivered">Delivered (Notify Buyer)</option>
+                              <option value="cancelled">Cancelled</option>
+                            </select>
+                            {updatingOrderId === ord.id && (
+                              <span className="text-[10px] text-slate-400 animate-pulse">Saving...</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Middle Section: Ordered Products List */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        <span>Ordered Items ({itemsToDisplay.length})</span>
+                        <span>Item Subtotal</span>
+                      </div>
+
+                      <div className="divide-y divide-slate-100 bg-white rounded-lg border border-slate-200 overflow-hidden">
+                        {itemsToDisplay.map((item, idx) => (
+                          <div key={`${item.productId}_${idx}`} className="p-2.5 flex items-center justify-between gap-3 hover:bg-slate-50/50 transition-colors">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <img
+                                src={resolveProductImage(item.image)}
+                                alt={item.title}
+                                className="w-10 h-10 rounded-md object-cover border border-slate-200 shrink-0"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div className="min-w-0">
+                                <p className="font-semibold text-slate-800 line-clamp-1">{item.title}</p>
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                  {item.unit ? `${item.unit} • ` : ''}৳{item.price} per unit
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4 shrink-0 text-right">
+                              <span className="px-2 py-0.5 bg-slate-100 text-slate-700 font-semibold rounded text-[11px]">
+                                Qty: {item.quantity}
+                              </span>
+                              <span className="font-bold text-[#142B4A] text-xs min-w-[70px]">
+                                {formatBDT(item.price * item.quantity)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Financial Breakdown & Payment Info */}
+                    <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-500 border-t border-slate-200">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="bg-slate-200/70 text-slate-700 px-2 py-0.5 rounded font-medium uppercase">
+                          Payment: {ord.paymentMethod.toUpperCase()} ({ord.paymentStatus})
+                        </span>
+                        {ord.paymentReference && (
+                          <span className="text-slate-500 font-mono">
+                            TrxID: {ord.paymentReference}
+                          </span>
+                        )}
+                        {ord.pointsUsed > 0 && (
+                          <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium">
+                            {ord.pointsUsed} pts discount applied (-৳{ord.discountFromPoints})
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 font-semibold text-xs text-slate-700">
+                        <span>Items Total: <strong className="text-slate-900">{formatBDT(itemsTotal)}</strong></span>
+                        <span>•</span>
+                        <span>Order Total: <strong className="text-[#142B4A] font-bold">{formatBDT(ord.totalAmount)}</strong></span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
