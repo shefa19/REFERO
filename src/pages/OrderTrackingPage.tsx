@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { useStore } from '../context/StoreContext';
 import { formatBDT, formatPoints, formatDate } from '../utils/formatters';
 import {
@@ -12,15 +13,42 @@ import {
   Printer,
   AlertCircle,
   X,
+  Star,
+  Check,
 } from 'lucide-react';
+import { WriteReviewModal } from '../components/products/WriteReviewModal';
 
 export const OrderTrackingPage: React.FC = () => {
-  const { selectedOrderId, orders, navigateTo, processRefund, confirmOrderReceived, showToast } = useStore();
+  const { currentUser } = useAuth();
+  const { selectedOrderId, orders, reviews, navigateTo, processRefund, confirmOrderReceived, showToast } = useStore();
   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
   const [refundReason, setRefundReason] = useState('');
   const [refundError, setRefundError] = useState('');
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
   const [isConfirmingDelivery, setIsConfirmingDelivery] = useState(false);
+
+  const [reviewModalData, setReviewModalData] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    orderNumber?: string;
+    productId: string;
+    productTitle?: string;
+    productImage?: string;
+  }>({
+    isOpen: false,
+    orderId: '',
+    productId: '',
+  });
+
+  const isProductReviewedInOrder = (productId: string, orderId: string) => {
+    if (!currentUser) return false;
+    return reviews.some(
+      (r) =>
+        r.productId === productId &&
+        r.orderId === orderId &&
+        r.customerId === currentUser.id
+    );
+  };
 
   const order = orders.find((o) => o.id === selectedOrderId) || orders[0];
 
@@ -226,25 +254,63 @@ export const OrderTrackingPage: React.FC = () => {
           <div>
             <h4 className="font-bold text-slate-800 uppercase tracking-wider mb-2">Ordered Items</h4>
             <div className="space-y-3">
-              {order.items.map((it) => (
-                <div key={it.productId} className="flex items-center gap-3">
-                  <img
-                    src={it.image}
-                    alt={it.title}
-                    className="w-12 h-12 rounded-lg object-cover border border-slate-200"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-slate-800 truncate">{it.title}</p>
-                    <span className="text-slate-500 text-[11px]">
-                      {it.quantity} × {formatBDT(it.price)} · Sold by {it.shopName}
-                    </span>
+              {order.items.map((it) => {
+                const canReview = order.orderStatus === 'completed' || order.orderStatus === 'delivered';
+                const hasReviewed = isProductReviewedInOrder(it.productId, order.id);
+
+                return (
+                  <div key={it.productId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <img
+                        src={it.image}
+                        alt={it.title}
+                        className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-800 truncate">{it.title}</p>
+                        <span className="text-slate-500 text-[11px] block">
+                          {it.quantity} × {formatBDT(it.price)} · Sold by {it.shopName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                      <span className="font-mono font-bold text-slate-800">
+                        {formatBDT(it.price * it.quantity)}
+                      </span>
+
+                      {canReview && (
+                        <div>
+                          {hasReviewed ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-semibold border border-emerald-200">
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Reviewed</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setReviewModalData({
+                                  isOpen: true,
+                                  orderId: order.id,
+                                  orderNumber: order.orderNumber,
+                                  productId: it.productId,
+                                  productTitle: it.title,
+                                  productImage: it.image,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F47B44] hover:bg-[#e06830] text-white text-[11px] font-bold transition-all shadow-2xs hover:shadow-xs cursor-pointer active:scale-95"
+                            >
+                              <Star className="w-3.5 h-3.5 fill-white" />
+                              <span>Rate Product</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <span className="font-mono font-bold text-slate-800">
-                    {formatBDT(it.price * it.quantity)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -370,6 +436,17 @@ export const OrderTrackingPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Product Review Modal */}
+      <WriteReviewModal
+        isOpen={reviewModalData.isOpen}
+        onClose={() => setReviewModalData((prev) => ({ ...prev, isOpen: false }))}
+        orderId={reviewModalData.orderId}
+        orderNumber={reviewModalData.orderNumber}
+        productId={reviewModalData.productId}
+        productTitle={reviewModalData.productTitle}
+        productImage={reviewModalData.productImage}
+      />
     </div>
   );
 };

@@ -24,12 +24,15 @@ import {
   AlertTriangle,
   Send,
   Inbox,
+  Star,
 } from 'lucide-react';
+import { WriteReviewModal } from '../../components/products/WriteReviewModal';
 
 export const CustomerDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const {
     orders,
+    reviews,
     pointTransactions,
     transferRequests,
     referrals,
@@ -62,6 +65,29 @@ export const CustomerDashboard: React.FC = () => {
 
   const [processingTransfers, setProcessingTransfers] = useState<Record<string, boolean>>({});
   const [confirmingOrderId, setConfirmingOrderId] = useState<string | null>(null);
+
+  const [reviewModalData, setReviewModalData] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    orderNumber?: string;
+    productId: string;
+    productTitle?: string;
+    productImage?: string;
+  }>({
+    isOpen: false,
+    orderId: '',
+    productId: '',
+  });
+
+  const isProductReviewedInOrder = (productId: string, orderId: string) => {
+    if (!currentUser) return false;
+    return reviews.some(
+      (r) =>
+        r.productId === productId &&
+        r.orderId === orderId &&
+        r.customerId === currentUser.id
+    );
+  };
 
   const handleAcceptTransfer = async (reqId: string) => {
     if (processingTransfers[reqId]) return;
@@ -518,22 +544,61 @@ export const CustomerDashboard: React.FC = () => {
 
                 {/* Items */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  {ord.items.map((it) => (
-                    <div key={it.productId} className="flex items-center gap-3">
-                      <img
-                        src={it.image}
-                        alt={it.title}
-                        className="w-10 h-10 rounded-md object-cover border border-slate-200"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-800 truncate">{it.title}</p>
-                        <span className="text-[11px] text-slate-500">
-                          Qty: {it.quantity} · {it.shopName}
-                        </span>
+                  {ord.items.map((it) => {
+                    const canReview = ord.orderStatus === 'completed' || ord.orderStatus === 'delivered';
+                    const hasReviewed = isProductReviewedInOrder(it.productId, ord.id);
+
+                    return (
+                      <div
+                        key={it.productId}
+                        className="flex items-center justify-between gap-2.5 p-2 rounded-lg bg-slate-50/80 border border-slate-100"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <img
+                            src={it.image}
+                            alt={it.title}
+                            className="w-10 h-10 rounded-md object-cover border border-slate-200 shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-slate-800 truncate">{it.title}</p>
+                            <span className="text-[11px] text-slate-500 block truncate">
+                              Qty: {it.quantity} · {it.shopName}
+                            </span>
+                          </div>
+                        </div>
+
+                        {canReview && (
+                          <div className="shrink-0">
+                            {hasReviewed ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" />
+                                <span>Reviewed</span>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setReviewModalData({
+                                    isOpen: true,
+                                    orderId: ord.id,
+                                    orderNumber: ord.orderNumber,
+                                    productId: it.productId,
+                                    productTitle: it.title,
+                                    productImage: it.image,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F47B44] hover:bg-[#e06830] text-white text-[10px] font-bold transition-all shadow-2xs hover:shadow-xs cursor-pointer active:scale-95"
+                              >
+                                <Star className="w-3 h-3 fill-white" />
+                                <span>Rate Product</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-100 text-xs gap-2">
@@ -1187,6 +1252,17 @@ export const CustomerDashboard: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Product Review Modal */}
+      <WriteReviewModal
+        isOpen={reviewModalData.isOpen}
+        onClose={() => setReviewModalData((prev) => ({ ...prev, isOpen: false }))}
+        orderId={reviewModalData.orderId}
+        orderNumber={reviewModalData.orderNumber}
+        productId={reviewModalData.productId}
+        productTitle={reviewModalData.productTitle}
+        productImage={reviewModalData.productImage}
+      />
     </div>
   );
 };
