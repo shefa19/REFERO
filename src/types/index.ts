@@ -9,10 +9,12 @@ export interface UserProfile {
   referralCode: string;
   referredBy?: string;
   pointsBalance: number;
+  points?: number;
   pendingPoints: number;
   avatarUrl?: string;
   status: 'active' | 'suspended';
   shopId?: string;
+  wishlist?: string[];
   createdAt: string;
 }
 
@@ -47,6 +49,8 @@ export interface Shop {
   customerSupportPhone?: string;
   customerSupportEmail?: string;
   customerSupportHours?: string;
+  totalSales?: number;
+  commissionRate?: number;
   emailNotificationEnabled?: boolean;
   orderSmsNotificationEnabled?: boolean;
   createdAt: string;
@@ -95,7 +99,9 @@ export type OrderStatus =
   | 'confirmed'
   | 'processing'
   | 'shipped'
+  | 'out_for_delivery'
   | 'delivered'
+  | 'completed'
   | 'cancelled'
   | 'refund_requested'
   | 'refunded';
@@ -136,8 +142,16 @@ export interface Order {
   referralRewardCredited: boolean;
   createdAt: string;
   deliveredAt?: string;
+  completedAt?: string;
   cancelReason?: string;
   refundReason?: string;
+  productIds?: string[];
+  shopId?: string;
+  shopName?: string;
+  shopIds?: string[];
+  sellerUids?: string[];
+  sellerUid?: string;
+  confirmedBy?: 'customer' | 'admin';
 }
 
 export type PointTransactionType =
@@ -172,9 +186,10 @@ export interface PointTransferRequest {
   recipientName: string;
   points: number;
   note?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status: 'pending' | 'approved' | 'accepted' | 'rejected' | 'cancelled';
   createdAt: string;
   processedAt?: string;
+  requestType?: 'transfer' | 'request';
 }
 
 export interface ReferralRecord {
@@ -214,11 +229,13 @@ export interface AuditLog {
 export interface NotificationItem {
   id: string;
   userId: string;
+  recipientEmail?: string;
   title: string;
   message: string;
   type: 'order' | 'points' | 'transfer' | 'system';
   read: boolean;
   link?: string;
+  metadata?: Record<string, any>;
   createdAt: string;
 }
 
@@ -226,3 +243,23 @@ export interface CartItem {
   product: Product;
   quantity: number;
 }
+
+export interface ProductReview {
+  id: string;
+  productId: string;
+  productTitle: string;
+  shopId: string;
+  orderId: string; // The qualifying delivered order
+  customerId: string;
+  customerName: string;
+  customerEmail?: string;
+  rating: number; // 1 to 5
+  comment: string;
+  images?: string[];
+  status: 'pending' | 'published' | 'hidden' | 'flagged';
+  moderationReason?: string;
+  isDemo?: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+

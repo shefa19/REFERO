@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 
 export const HomePage: React.FC = () => {
-  const { products, shops, navigateTo, setFilter, dataSources } = useStore();
-  const { currentUser } = useAuth();
+  const { products, shops, navigateTo, setFilter, dataSources, openAuthModal } = useStore();
+  const { currentUser, isRealAdmin, isAdminPreviewActive } = useAuth();
 
   const trendingProducts = products.filter((p) => p.isTrending);
   const bestSellers = products.filter((p) => p.isBestSeller);
@@ -119,38 +119,40 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* Data Source Transparency Banner */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div
-          className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xs shadow-2xs ${
-            dataSources.products === 'live'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-              : 'bg-slate-50 border-slate-200 text-slate-700'
-          }`}
-        >
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={`inline-block w-2.5 h-2.5 rounded-full ${
-                dataSources.products === 'live' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            <span className="font-bold">
-              {dataSources.products === 'live'
-                ? 'Live Database Mode: Connected to Firebase Firestore (refero-d897d)'
-                : 'Interactive University Showcase Mode (Sample Inventory Active)'}
-            </span>
-            <span className="text-slate-400 hidden sm:inline">·</span>
-            <span className="text-slate-600">
-              {dataSources.products === 'live'
-                ? 'Rendering live catalog records loaded directly from remote Firestore /products collection.'
-                : 'Remote /products collection has 0 items; rendering sample demo catalog so you can demonstrate the marketplace immediately.'}
+      {/* Data Source Transparency Banner (Visible only for Admin & University Demo Mode) */}
+      {(isRealAdmin || isAdminPreviewActive) && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          <div
+            className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xs shadow-2xs ${
+              dataSources.products === 'live'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`inline-block w-2.5 h-2.5 rounded-full ${
+                  dataSources.products === 'live' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
+                }`}
+              />
+              <span className="font-bold">
+                {dataSources.products === 'live'
+                  ? 'Live Database Mode: Connected to Firebase Firestore (refero-d897d)'
+                  : 'Interactive University Showcase Mode (Sample Inventory Active)'}
+              </span>
+              <span className="text-slate-400 hidden sm:inline">·</span>
+              <span className="text-slate-600">
+                {dataSources.products === 'live'
+                  ? 'Rendering live catalog records loaded directly from remote Firestore /products collection.'
+                  : 'Remote /products collection has 0 items; rendering sample demo catalog so you can demonstrate the marketplace immediately.'}
+              </span>
+            </div>
+            <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 shrink-0 self-start sm:self-auto">
+              {dataSources.products === 'live' ? 'Firestore: /products (Live)' : 'Catalog: Demo Fallback'}
             </span>
           </div>
-          <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 shrink-0 self-start sm:self-auto">
-            {dataSources.products === 'live' ? 'Firestore: /products (Live)' : 'Catalog: Demo Fallback'}
-          </span>
         </div>
-      </div>
+      )}
 
       {/* 2. Category Shortcuts */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6">
@@ -380,9 +382,9 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* 8. Referral Program Banner */}
+      {/* 8. Referral Program Banner (Role-Aware: Guest overview vs Customer personal code) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="bg-gradient-to-r from-[#142B4A] to-[#1E3A5F] rounded-2xl p-6 sm:p-8 text-white flex flex-col md:flex-row items-center justify-between gap-6">
+        <div className="bg-gradient-to-r from-[#142B4A] to-[#1E3A5F] rounded-2xl p-6 sm:p-8 text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
           <div className="space-y-2">
             <span className="text-xs font-bold text-[#F47B44] uppercase tracking-wider">
               Referral Program
@@ -390,17 +392,36 @@ export const HomePage: React.FC = () => {
             <h3 className="text-xl sm:text-2xl font-extrabold text-white">
               Give ৳50 Signup Points, Get 150 Points on First Order
             </h3>
-            <p className="text-xs text-slate-300 max-w-lg">
-              Your personal referral code is ready in your Customer Dashboard. Invite friends and neighbors in your apartment building to join the REFERO community.
+            <p className="text-xs text-slate-300 max-w-lg leading-relaxed">
+              {currentUser && currentUser.referralCode ? (
+                <>
+                  Your personal referral code is ready:{' '}
+                  <span className="bg-white/20 font-mono px-2 py-0.5 rounded text-white font-bold tracking-wide">
+                    {currentUser.referralCode}
+                  </span>
+                  . Share with friends to earn 150 points when their first qualifying order is delivered.
+                </>
+              ) : (
+                'Earn 150 REFERO Points for every friend you invite once their first qualifying order is delivered. New members receive a 50-point welcome bonus to spend on groceries.'
+              )}
             </p>
           </div>
 
-          <button
-            onClick={() => navigateTo('customer_dashboard')}
-            className="px-6 py-3 bg-[#F47B44] hover:bg-[#e06830] active:scale-98 text-white text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer shadow-md"
-          >
-            Go to Referral Centre
-          </button>
+          {currentUser ? (
+            <button
+              onClick={() => navigateTo('customer_dashboard', { customerTab: 'referrals' })}
+              className="px-6 py-3 bg-[#F47B44] hover:bg-[#e06830] active:scale-98 text-white text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer shadow-md"
+            >
+              Go to Referral Centre &rarr;
+            </button>
+          ) : (
+            <button
+              onClick={() => openAuthModal('register')}
+              className="px-6 py-3 bg-[#F47B44] hover:bg-[#e06830] active:scale-98 text-white text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer shadow-md"
+            >
+              Join to Get Referral Code
+            </button>
+          )}
         </div>
       </section>
     </div>

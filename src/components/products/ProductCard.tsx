@@ -2,6 +2,7 @@ import React from 'react';
 import { Product } from '../../types';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT } from '../../utils/formatters';
+import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
 import { ShoppingBag, Heart, Star, Sparkles } from 'lucide-react';
 
 interface ProductCardProps {
@@ -34,11 +35,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       {/* Product Image Area */}
       <div className="relative aspect-4/3 bg-slate-100 overflow-hidden">
         <img
-          src={product.images[0]}
+          src={resolveProductImage(product.images?.[0])}
           alt={product.title}
           className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
           referrerPolicy="no-referrer"
           loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = IMAGE_ASSETS.defaultProduct;
+          }}
         />
 
         {/* Wishlist toggle */}

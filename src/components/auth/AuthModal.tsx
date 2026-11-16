@@ -4,9 +4,11 @@ import { useStore } from '../../context/StoreContext';
 import { ReferoLogo } from '../common/ReferoLogo';
 import { X, Lock, Mail, User, Sparkles, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 
+import { formatAuthError } from '../../utils/authErrors';
+
 export const AuthModal: React.FC = () => {
   const { isAuthModalOpen, closeAuthModal, authModalTab, navigateTo, showToast } = useStore();
-  const { login, register, isLoading, switchDemoRole } = useAuth();
+  const { login, register, isLoading } = useAuth();
 
   const [tab, setTab] = useState<'login' | 'register' | 'forgot'>(authModalTab);
   const [email, setEmail] = useState('');
@@ -21,57 +23,46 @@ export const AuthModal: React.FC = () => {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (!email || !password) {
-      setErrorMsg('Please enter both email and password.');
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setErrorMsg('Please enter both your email address and password.');
       return;
     }
 
-    const res = await login(email, password);
+    const res = await login(trimmedEmail, password);
     if (res.success) {
       closeAuthModal();
       showToast('Welcome back to REFERO!');
-      if (email.includes('admin')) navigateTo('admin_dashboard');
-      else if (email.includes('shop') || email.includes('kabir')) navigateTo('shopkeeper_dashboard');
+      if (trimmedEmail.includes('admin')) navigateTo('admin_dashboard');
+      else if (trimmedEmail.includes('shop') || trimmedEmail.includes('kabir')) navigateTo('shopkeeper_dashboard');
       else navigateTo('customer_dashboard');
     } else {
-      setErrorMsg(res.error || 'Login failed.');
+      setErrorMsg(formatAuthError(res.error || 'Login failed.'));
     }
   };
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (!fullName || !email || !password) {
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim();
+    if (!trimmedName || !trimmedEmail || !password) {
       setErrorMsg('Please complete all required fields.');
       return;
     }
     if (password.length < 6) {
-      setErrorMsg('Password should be at least 6 characters.');
+      setErrorMsg('Please choose a password with at least 6 characters.');
       return;
     }
 
-    const res = await register(fullName, email, password, referralCode);
+    const res = await register(trimmedName, trimmedEmail, password, referralCode);
     if (res.success) {
       closeAuthModal();
       showToast('Account created! 50 Welcome REFERO Points credited.');
       navigateTo('customer_dashboard');
     } else {
-      setErrorMsg(res.error || 'Registration failed.');
+      setErrorMsg(formatAuthError(res.error || 'Registration failed.'));
     }
-  };
-
-  const fillQuickDemo = (role: 'admin' | 'shopkeeper' | 'customer') => {
-    if (role === 'admin') {
-      setEmail('admin@refero.com.bd');
-      setPassword('admin123');
-    } else if (role === 'shopkeeper') {
-      setEmail('kabir@greenvalley.bd');
-      setPassword('shop123');
-    } else {
-      setEmail('rahim.ahmed@gmail.com');
-      setPassword('customer123');
-    }
-    setErrorMsg(null);
   };
 
   return (
@@ -301,36 +292,6 @@ export const AuthModal: React.FC = () => {
             </button>
           </div>
         )}
-
-        {/* Demo Fast-Fill Strip for Class Evaluation */}
-        <div className="mt-6 pt-4 border-t border-slate-100">
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 mb-2">
-            Class Evaluation Quick Credentials:
-          </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <button
-              type="button"
-              onClick={() => fillQuickDemo('customer')}
-              className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
-            >
-              Customer (Moumita)
-            </button>
-            <button
-              type="button"
-              onClick={() => fillQuickDemo('shopkeeper')}
-              className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
-            >
-              Shopkeeper (Mahin)
-            </button>
-            <button
-              type="button"
-              onClick={() => fillQuickDemo('admin')}
-              className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
-            >
-              Admin (Shefa)
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

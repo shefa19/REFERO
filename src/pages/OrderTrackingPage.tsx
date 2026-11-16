@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { useStore } from '../context/StoreContext';
 import { formatBDT, formatPoints, formatDate } from '../utils/formatters';
 import {
@@ -12,14 +13,42 @@ import {
   Printer,
   AlertCircle,
   X,
+  Star,
+  Check,
 } from 'lucide-react';
+import { WriteReviewModal } from '../components/products/WriteReviewModal';
 
 export const OrderTrackingPage: React.FC = () => {
-  const { selectedOrderId, orders, navigateTo, processRefund, showToast } = useStore();
+  const { currentUser } = useAuth();
+  const { selectedOrderId, orders, reviews, navigateTo, processRefund, confirmOrderReceived, showToast } = useStore();
   const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
   const [refundReason, setRefundReason] = useState('');
   const [refundError, setRefundError] = useState('');
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [isConfirmingDelivery, setIsConfirmingDelivery] = useState(false);
+
+  const [reviewModalData, setReviewModalData] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    orderNumber?: string;
+    productId: string;
+    productTitle?: string;
+    productImage?: string;
+  }>({
+    isOpen: false,
+    orderId: '',
+    productId: '',
+  });
+
+  const isProductReviewedInOrder = (productId: string, orderId: string) => {
+    if (!currentUser) return false;
+    return reviews.some(
+      (r) =>
+        r.productId === productId &&
+        r.orderId === orderId &&
+        r.customerId === currentUser.id
+    );
+  };
 
   const order = orders.find((o) => o.id === selectedOrderId) || orders[0];
 
@@ -42,7 +71,8 @@ export const OrderTrackingPage: React.FC = () => {
     { key: 'confirmed', label: 'Confirmed', desc: 'Shopkeeper accepted' },
     { key: 'processing', label: 'Processing', desc: 'Packaging with seal' },
     { key: 'shipped', label: 'Dispatched', desc: 'With courier partner' },
-    { key: 'delivered', label: 'Delivered', desc: 'Points awarded' },
+    { key: 'delivered', label: 'Delivered', desc: 'Arrived at your door' },
+    { key: 'completed', label: 'Completed', desc: 'Receipt confirmed' },
   ];
 
   const currentStepIndex = steps.findIndex((s) => s.key === order.orderStatus);
@@ -169,21 +199,54 @@ export const OrderTrackingPage: React.FC = () => {
             <Sparkles className="w-5 h-5 text-[#F47B44] shrink-0 mt-0.5" />
             <div>
               <span className="font-bold text-[#142B4A] block">
-                REFERO Points Award: +{formatPoints(order.pointsEarned)} Points
+                REFERO Points Loyalty Reward: +{formatPoints(order.pointsEarned)} Points
               </span>
               <p className="text-slate-600 mt-0.5">
-                {order.pointsCredited
-                  ? 'Points have been authoritatively credited to your account ledger.'
-                  : 'Points are pending and will be automatically credited to your balance once the order reaches "Delivered" status.'}
+                {order.pointsCredited || order.orderStatus === 'completed'
+                  ? 'Points have been credited to your official REFERO account ledger.'
+                  : order.orderStatus === 'delivered'
+                  ? 'Your package has arrived! Click "Confirm Received" below to complete the order and credit your points.'
+                  : 'Points are pending fulfillment and will be ready to claim once the package is delivered.'}
               </p>
             </div>
           </div>
-          <button
-            onClick={() => navigateTo('customer_dashboard')}
-            className="self-start sm:self-auto px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] transition-colors whitespace-nowrap cursor-pointer"
-          >
-            View Points Ledger
-          </button>
+          
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {order.orderStatus === 'delivered' && !order.pointsCredited && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsConfirmingDelivery(true);
+                  try {
+                    await confirmOrderReceived(order.id);
+                  } finally {
+                    setIsConfirmingDelivery(false);
+                  }
+                }}
+                disabled={isConfirmingDelivery}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isConfirmingDelivery ? (
+                  <>
+                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Confirming...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirm Received</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <button
+              onClick={() => navigateTo('customer_dashboard')}
+              className="px-3.5 py-1.5 bg-[#142B4A] text-white text-xs font-semibold rounded-lg hover:bg-[#1E3A5F] transition-colors whitespace-nowrap cursor-pointer"
+            >
+              View Points Ledger
+            </button>
+          </div>
         </div>
 
         {/* Items List & Delivery Address Details */}
@@ -191,25 +254,63 @@ export const OrderTrackingPage: React.FC = () => {
           <div>
             <h4 className="font-bold text-slate-800 uppercase tracking-wider mb-2">Ordered Items</h4>
             <div className="space-y-3">
-              {order.items.map((it) => (
-                <div key={it.productId} className="flex items-center gap-3">
-                  <img
-                    src={it.image}
-                    alt={it.title}
-                    className="w-12 h-12 rounded-lg object-cover border border-slate-200"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-slate-800 truncate">{it.title}</p>
-                    <span className="text-slate-500 text-[11px]">
-                      {it.quantity} × {formatBDT(it.price)} · Sold by {it.shopName}
-                    </span>
+              {order.items.map((it) => {
+                const canReview = order.orderStatus === 'completed' || order.orderStatus === 'delivered';
+                const hasReviewed = isProductReviewedInOrder(it.productId, order.id);
+
+                return (
+                  <div key={it.productId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <img
+                        src={it.image}
+                        alt={it.title}
+                        className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-800 truncate">{it.title}</p>
+                        <span className="text-slate-500 text-[11px] block">
+                          {it.quantity} × {formatBDT(it.price)} · Sold by {it.shopName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                      <span className="font-mono font-bold text-slate-800">
+                        {formatBDT(it.price * it.quantity)}
+                      </span>
+
+                      {canReview && (
+                        <div>
+                          {hasReviewed ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-semibold border border-emerald-200">
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Reviewed</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setReviewModalData({
+                                  isOpen: true,
+                                  orderId: order.id,
+                                  orderNumber: order.orderNumber,
+                                  productId: it.productId,
+                                  productTitle: it.title,
+                                  productImage: it.image,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F47B44] hover:bg-[#e06830] text-white text-[11px] font-bold transition-all shadow-2xs hover:shadow-xs cursor-pointer active:scale-95"
+                            >
+                              <Star className="w-3.5 h-3.5 fill-white" />
+                              <span>Rate Product</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <span className="font-mono font-bold text-slate-800">
-                    {formatBDT(it.price * it.quantity)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -335,6 +436,17 @@ export const OrderTrackingPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Product Review Modal */}
+      <WriteReviewModal
+        isOpen={reviewModalData.isOpen}
+        onClose={() => setReviewModalData((prev) => ({ ...prev, isOpen: false }))}
+        orderId={reviewModalData.orderId}
+        orderNumber={reviewModalData.orderNumber}
+        productId={reviewModalData.productId}
+        productTitle={reviewModalData.productTitle}
+        productImage={reviewModalData.productImage}
+      />
     </div>
   );
 };

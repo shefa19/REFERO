@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
+import { useAuth } from '../context/AuthContext';
 import { ProductCard } from '../components/products/ProductCard';
 import { formatBDT } from '../utils/formatters';
 import {
@@ -13,6 +14,7 @@ import {
 
 export const ProductsPage: React.FC = () => {
   const { products, shops, filters, setFilter, resetFilters, navigateTo, dataSources } = useStore();
+  const { isRealAdmin, isAdminPreviewActive } = useAuth();
   const [isMobileFilterOpen, setIsMobileFilterOpen] = useState(false);
 
   const categories = [
@@ -116,15 +118,17 @@ export const ProductsPage: React.FC = () => {
             <p className="text-xs text-slate-500">
               Showing <strong className="text-slate-800 font-mono">{sortedProducts.length}</strong> items
             </p>
-            <span
-              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                dataSources.products === 'live'
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                  : 'bg-amber-50 text-amber-800 border-amber-200'
-              }`}
-            >
-              {dataSources.products === 'live' ? '● Live Firestore Data' : '○ Demo Showcase Mode'}
-            </span>
+            {(isRealAdmin || isAdminPreviewActive) && (
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                  dataSources.products === 'live'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}
+              >
+                {dataSources.products === 'live' ? '● Live Firestore Data' : '○ Demo Showcase Mode'}
+              </span>
+            )}
           </div>
         </div>
 

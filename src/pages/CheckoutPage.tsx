@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useAuth } from '../context/AuthContext';
 import { formatBDT, formatPoints, pointsToBdt, bdtToPoints, calculateEarnedPoints } from '../utils/formatters';
+import { resolveProductImage, IMAGE_ASSETS } from '../utils/imageAssets';
 import { PaymentMethod, OrderAddress } from '../types';
 import {
   ShieldCheck,
@@ -90,7 +91,7 @@ export const CheckoutPage: React.FC = () => {
     title: ci.product.title,
     price: ci.product.price,
     quantity: ci.quantity,
-    image: ci.product.images[0],
+    image: resolveProductImage(ci.product.images?.[0]),
     shopId: ci.product.shopId,
     shopName: ci.product.shopName,
     unit: ci.product.unit,
@@ -393,10 +394,13 @@ export const CheckoutPage: React.FC = () => {
               {cart.map((item) => (
                 <div key={item.product.id} className="py-2.5 flex items-center justify-between gap-3 text-xs">
                   <img
-                    src={item.product.images[0]}
+                    src={resolveProductImage(item.product.images?.[0])}
                     alt={item.product.title}
                     className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = IMAGE_ASSETS.defaultProduct;
+                    }}
                   />
                   <div className="flex-1 min-w-0">
                     <h4 className="font-semibold text-slate-800 truncate">{item.product.title}</h4>

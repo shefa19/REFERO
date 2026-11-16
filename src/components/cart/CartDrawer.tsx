@@ -1,6 +1,7 @@
 import React from 'react';
 import { useStore } from '../../context/StoreContext';
 import { formatBDT, formatPoints, calculateEarnedPoints } from '../../utils/formatters';
+import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
 import { X, Trash2, Plus, Minus, ArrowRight, ShoppingBag, Sparkles } from 'lucide-react';
 
 export const CartDrawer: React.FC = () => {
@@ -27,7 +28,7 @@ export const CartDrawer: React.FC = () => {
     title: ci.product.title,
     price: ci.product.price,
     quantity: ci.quantity,
-    image: ci.product.images[0],
+    image: resolveProductImage(ci.product.images?.[0]),
     shopId: ci.product.shopId,
     shopName: ci.product.shopName,
     unit: ci.product.unit,
@@ -111,10 +112,13 @@ export const CartDrawer: React.FC = () => {
               cart.map((item) => (
                 <div key={item.product.id} className="py-3.5 flex gap-3">
                   <img
-                    src={item.product.images[0]}
+                    src={resolveProductImage(item.product.images?.[0])}
                     alt={item.product.title}
                     className="w-18 h-18 object-cover rounded-lg border border-slate-200 bg-slate-50 shrink-0"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = IMAGE_ASSETS.defaultProduct;
+                    }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
