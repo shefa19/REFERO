@@ -477,16 +477,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         // 4. Load reviews from Firestore & merge with DEMO_REVIEWS
         try {
-          const revQuery = currentUser?.role === 'admin'
-            ? collection(activeDb, 'reviews')
-            : query(collection(activeDb, 'reviews'), where('status', '==', 'published'));
+          const revQuery = collection(activeDb, 'reviews');
           const revSnap = await getDocs(revQuery);
           if (isMounted) {
             const firestoreReviews = revSnap.docs.map((d) => ({
               id: d.id,
               ...d.data(),
             })) as ProductReview[];
-            // Seamlessly combine real reviews with DEMO_REVIEWS (avoiding duplicates)
+            // Seamlessly combine real reviews with DEMO_REVIEWS (real Firestore reviews take precedence)
             const combinedReviews = [
               ...firestoreReviews,
               ...DEMO_REVIEWS.filter((d) => !firestoreReviews.some((r) => r.id === d.id)),
@@ -3700,7 +3698,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const reviewId = `review_${eligibility.qualifyingOrderId}_${reviewData.productId}`;
     const nowIso = new Date().toISOString();
 
-    const initialStatus: ProductReview['status'] = currentUser.role === 'admin' ? 'published' : 'pending';
+    // Reviews from verified purchasers are published immediately
+    const initialStatus: ProductReview['status'] = 'published';
+
+    // Ensure images is always a clean array of valid URL strings (never undefined)
+    const reviewImages: string[] = Array.isArray(reviewData.images)
+      ? reviewData.images.filter((img): img is string => typeof img === 'string' && img.trim().length > 0)
+      : [];
 
     const newReview: ProductReview = {
       id: reviewId,
@@ -3713,7 +3717,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       customerEmail: currentUser.email,
       rating: reviewData.rating,
       comment: reviewData.comment.trim(),
-      images: reviewData.images || [],
+      images: reviewImages,
       status: initialStatus,
       createdAt: nowIso,
     };
@@ -3722,55 +3726,36 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (isFirebaseConfigured() && activeDb && !isAdminPreviewActive) {
       try {
         await setDoc(doc(activeDb, 'reviews', reviewId), cleanUndefinedFields(newReview));
-        if (initialStatus === 'published') {
-          const allExistingReviews = reviews.filter((r) => r.productId === reviewData.productId && r.status === 'published');
-          const updatedReviewsList = [...allExistingReviews, newReview];
-          const newRating = Number((updatedReviewsList.reduce((sum, r) => sum + r.rating, 0) / updatedReviewsList.length).toFixed(1));
-          const newCount = updatedReviewsList.length;
-
-          await updateDoc(doc(activeDb, 'products', reviewData.productId), {
-            rating: newRating,
-            reviewCount: newCount,
-            updatedAt: nowIso,
-          }).catch(() => {});
-        }
       } catch (err: any) {
         console.error('Firestore submit review error:', err);
+        showToast(err.message || 'Failed to save review to database.', 'error');
         return { success: false, message: err.message || 'Failed to save review to server.' };
       }
     }
 
-    setReviews((prev) => [newReview, ...prev]);
+    setReviews((prev) => {
+      const filtered = prev.filter((r) => r.id !== reviewId);
+      return [newReview, ...filtered];
+    });
 
-    if (initialStatus === 'published') {
-      const allExistingReviews = reviews.filter((r) => r.productId === reviewData.productId && r.status === 'published');
-      const updatedReviewsList = [...allExistingReviews, newReview];
-      const newRating = Number((updatedReviewsList.reduce((sum, r) => sum + r.rating, 0) / updatedReviewsList.length).toFixed(1));
-      const newCount = updatedReviewsList.length;
-      setProducts((prev) =>
-        prev.map((p) => (p.id === reviewData.productId ? { ...p, rating: newRating, reviewCount: newCount } : p))
-      );
+    const allExistingReviews = reviews.filter((r) => r.productId === reviewData.productId && r.id !== reviewId);
+    const updatedReviewsList = [...allExistingReviews, newReview];
+    const newRating = Number((updatedReviewsList.reduce((sum, r) => sum + r.rating, 0) / updatedReviewsList.length).toFixed(1));
+    const newCount = updatedReviewsList.length;
 
-      addNotification({
-        userId: currentUser.id,
-        title: 'Review Published',
-        message: `Your verified purchase review for "${resolvedProduct.title}" was published!`,
-        type: 'system',
-      });
+    setProducts((prev) =>
+      prev.map((p) => (p.id === reviewData.productId ? { ...p, rating: newRating, reviewCount: newCount } : p))
+    );
 
-      showToast('Thank you! Your verified purchase review has been published.', 'success');
-      return { success: true, message: 'Review published successfully.' };
-    } else {
-      addNotification({
-        userId: currentUser.id,
-        title: 'Review Submitted',
-        message: `Your verified purchase review for "${resolvedProduct.title}" has been submitted for moderation.`,
-        type: 'system',
-      });
+    addNotification({
+      userId: currentUser.id,
+      title: 'Review Published',
+      message: `Your verified purchase review for "${resolvedProduct.title}" was published!`,
+      type: 'system',
+    });
 
-      showToast('Thank you! Your review has been submitted for moderation.', 'info');
-      return { success: true, message: 'Review submitted for moderation.' };
-    }
+    showToast('Thank you! Your verified purchase review has been published.', 'success');
+    return { success: true, message: 'Review published successfully.' };
   };
 
   const updateProductReview = async (

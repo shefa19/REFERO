@@ -495,17 +495,13 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // REVIEWS COLLECTION (/reviews/{reviewId}) — SAFE INITIAL STATUS & VERIFICATION
+    // REVIEWS COLLECTION (/reviews/{reviewId}) — PUBLIC READ & VERIFIED PURCHASES
     // =========================================================================
     match /reviews/{reviewId} {
-      allow read: if (resource.data.status == 'published') ||
-        (isAuthenticated() && resource.data.customerId == request.auth.uid) ||
-        (isAuthenticated() && ('shopId' in resource.data) && isShopOwner(resource.data.shopId)) ||
-        isAdmin();
+      // 1. Public Read: Everyone (authenticated or unauthenticated) can read product reviews
+      allow read: if true;
 
-      // Enforces deterministic reviewId: review_{orderId}_{productId} preventing duplicate reviews.
-      // Customers cannot self-publish: safe initial status is strictly 'pending'.
-      // Validates order exists, is completed/delivered, belongs to this customer, and contains this product.
+      // 2. Verified Buyer Create: Deterministic reviewId prevents duplicate reviews for the same order item
       allow create: if isAdmin() || (
         isAuthenticated() &&
         request.resource.data.customerId == request.auth.uid &&
@@ -516,7 +512,8 @@ service cloud.firestore {
         request.resource.data.comment is string &&
         request.resource.data.comment.size() > 0 &&
         request.resource.data.comment.size() <= 2000 &&
-        request.resource.data.status == 'pending' &&
+        request.resource.data.status in ['published', 'pending'] &&
+        (!('images' in request.resource.data) || request.resource.data.images is list) &&
         request.resource.data.orderId is string &&
         exists(/databases/$(database)/documents/orders/$(request.resource.data.orderId)) &&
         get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerId == request.auth.uid &&
@@ -527,7 +524,7 @@ service cloud.firestore {
         )
       );
 
-      // Customers cannot change review status (moderation reserved for Admin)
+      // 3. Update: Customers can edit their review rating, text, or images; Admin can moderate
       allow update: if isAdmin() || (
         isAuthenticated() &&
         resource.data.customerId == request.auth.uid &&
@@ -535,13 +532,14 @@ service cloud.firestore {
         request.resource.data.orderId == resource.data.orderId &&
         request.resource.data.productId == resource.data.productId &&
         request.resource.data.shopId == resource.data.shopId &&
-        request.resource.data.status == resource.data.status &&
         request.resource.data.rating is number &&
         request.resource.data.rating >= 1 &&
         request.resource.data.rating <= 5 &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'comment', 'images', 'updatedAt'])
+        (!('images' in request.resource.data) || request.resource.data.images is list) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'comment', 'images', 'updatedAt', 'status'])
       );
 
+      // 4. Delete: Author customer or Admin
       allow delete: if isAdmin() || (
         isAuthenticated() && resource.data.customerId == request.auth.uid
       );

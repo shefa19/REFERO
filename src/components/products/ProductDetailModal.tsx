@@ -3,8 +3,10 @@ import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatBDT, formatPoints, formatDate } from '../../utils/formatters';
 import { resolveProductImage, IMAGE_ASSETS } from '../../utils/imageAssets';
-import { storage } from '../../services/firebase/config';
+import { storage, db, isFirebaseConfigured } from '../../services/firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { ProductReview } from '../../types';
 import {
   X,
   Star,
@@ -62,6 +64,37 @@ export const ProductDetailModal: React.FC = () => {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
+  const [liveReviews, setLiveReviews] = useState<ProductReview[]>([]);
+
+  // Real-time Firestore query for the open product's reviews
+  useEffect(() => {
+    if (!selectedProductId) return;
+
+    if (!isFirebaseConfigured() || !db) {
+      setLiveReviews([]);
+      return;
+    }
+
+    try {
+      const q = query(collection(db, 'reviews'), where('productId', '==', selectedProductId));
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const fetched = snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          })) as ProductReview[];
+          setLiveReviews(fetched);
+        },
+        (err) => {
+          console.warn('Realtime product reviews listener note:', err);
+        }
+      );
+      return () => unsubscribe();
+    } catch (err) {
+      console.warn('Review listener setup error:', err);
+    }
+  }, [selectedProductId]);
 
   // Close modal on Escape key
   useEffect(() => {
@@ -86,10 +119,19 @@ export const ProductDetailModal: React.FC = () => {
     currentUser &&
     currentUser.pointsBalance >= product.pointPrice;
 
-  // Filter reviews for this product
-  const productReviews = reviews.filter(
-    (r) => r.productId === product.id && (r.status === 'published' || (currentUser && r.customerId === currentUser.id))
-  );
+  // Combine real-time Firestore reviews with context reviews (Firestore reviews take precedence)
+  const productReviews = React.useMemo(() => {
+    const combined = [...liveReviews];
+    const contextProdReviews = reviews.filter((r) => r.productId === selectedProductId);
+    for (const cr of contextProdReviews) {
+      if (!combined.some((lr) => lr.id === cr.id)) {
+        combined.push(cr);
+      }
+    }
+    return combined.filter(
+      (r) => r.status === 'published' || (currentUser && r.customerId === currentUser.id)
+    );
+  }, [liveReviews, reviews, selectedProductId, currentUser]);
 
   const calculatedRating = productReviews.length > 0
     ? productReviews.reduce((sum, r) => sum + r.rating, 0) / productReviews.length
@@ -221,7 +263,7 @@ export const ProductDetailModal: React.FC = () => {
         finalImageUrl = reviewImagePreview;
       }
 
-      const reviewPayloadImages = finalImageUrl ? [finalImageUrl] : [];
+      const reviewPayloadImages = finalImageUrl && finalImageUrl.trim() ? [finalImageUrl.trim()] : [];
 
       if (editingReviewId) {
         const res = await updateProductReview(editingReviewId, {
@@ -233,6 +275,8 @@ export const ProductDetailModal: React.FC = () => {
           setEditingReviewId(null);
           setReviewComment('');
           handleRemoveReviewPhoto();
+        } else {
+          showToast(res.message, 'error');
         }
       } else {
         const res = await submitProductReview({
@@ -244,8 +288,12 @@ export const ProductDetailModal: React.FC = () => {
         if (res.success) {
           setReviewComment('');
           handleRemoveReviewPhoto();
+        } else {
+          showToast(res.message, 'error');
         }
       }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to submit review.', 'error');
     } finally {
       setIsSubmittingReview(false);
       setIsUploadingImage(false);

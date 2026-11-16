@@ -187,12 +187,14 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         finalImageUrl = imagePreview;
       }
 
+      const reviewPayloadImages = finalImageUrl && finalImageUrl.trim() ? [finalImageUrl.trim()] : [];
+
       const res = await submitProductReview({
         productId,
         orderId,
         rating,
         comment: comment.trim(),
-        images: finalImageUrl ? [finalImageUrl] : [],
+        images: reviewPayloadImages,
       });
 
       if (res.success) {
@@ -201,9 +203,11 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         onClose();
       } else {
         setErrorMsg(res.message);
+        showToast(res.message, 'error');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to submit review.');
+      showToast(err.message || 'Failed to submit review.', 'error');
     } finally {
       setIsSubmitting(false);
       setIsUploadingImage(false);
